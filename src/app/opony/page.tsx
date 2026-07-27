@@ -1152,14 +1152,15 @@ function HistoryTab({ vehicles }: { vehicles: VehicleOption[] }) {
   const [loading, setLoading] = useState(false);
 
   async function load(reg: string) {
-    if (!reg) return;
     setLoading(true);
-    const { data: ins } = await supabase
+    // Bez wybranego pojazdu → ostatnie inspekcje całej floty
+    let query = supabase
       .from("tire_inspections")
       .select("*")
-      .eq("vehicle_reg", reg)
       .order("inspection_date", { ascending: false })
       .limit(50);
+    if (reg) query = query.eq("vehicle_reg", reg);
+    const { data: ins } = await query;
     setInspections(ins ?? []);
     if (ins && ins.length > 0) {
       const ids = ins.map((i: TireInspection) => i.id);
@@ -1181,17 +1182,19 @@ function HistoryTab({ vehicles }: { vehicles: VehicleOption[] }) {
   return (
     <div className="space-y-4">
       <div className="w-64">
-        <label className="block text-xs text-slate-400 mb-1">Pojazd</label>
+        <label className="block text-xs text-slate-400 mb-1">Pojazd (filtr opcjonalny)</label>
         <select value={vehicleReg} onChange={e => setVehicleReg(e.target.value)}
           className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white">
-          <option value="">— wybierz —</option>
+          <option value="">— wszystkie pojazdy —</option>
           {vehicles.map(v => <option key={v.reg} value={v.reg}>{v.reg} ({v.vehicle_type})</option>)}
         </select>
       </div>
 
       {loading && <div className="text-slate-400 text-sm">Ładowanie...</div>}
-      {!loading && vehicleReg && inspections.length === 0 && (
-        <div className="text-slate-500 text-sm">Brak inspekcji dla tego pojazdu</div>
+      {!loading && inspections.length === 0 && (
+        <div className="text-slate-500 text-sm">
+          {vehicleReg ? "Brak inspekcji dla tego pojazdu" : "Brak zapisanych inspekcji"}
+        </div>
       )}
 
       <div className="space-y-2">
@@ -1206,6 +1209,9 @@ function HistoryTab({ vehicles }: { vehicles: VehicleOption[] }) {
               >
                 <div className="flex items-center gap-4">
                   <span className="text-white font-semibold">{ins.inspection_date}</span>
+                  <span className="font-mono text-xs font-semibold text-blue-300 bg-blue-900/40 px-2 py-0.5 rounded">
+                    {ins.vehicle_reg}
+                  </span>
                   {ins.inspector_name && <span className="text-slate-400 text-sm">{ins.inspector_name}</span>}
                   {ins.odometer_km && <span className="text-slate-400 text-sm">{ins.odometer_km.toLocaleString("pl-PL")} km</span>}
                   <span className="text-xs text-slate-500">{insReadings.length} pomiarów</span>
