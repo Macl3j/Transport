@@ -124,14 +124,15 @@ export default function ChecklistaPage() {
 
   // ── historia ────────────────────────────────────────────────────────────
   const loadHistory = useCallback(async (reg: string) => {
-    if (!reg.trim()) { setHistory([]); return; }
     setLoadingHistory(true);
-    const { data } = await supabase
+    // Bez wpisanej rejestracji → ostatnie checklisty całej floty
+    let query = supabase
       .from("equipment_checklists")
       .select("*")
-      .ilike("vehicle_reg", reg.trim())
       .order("created_at", { ascending: false })
-      .limit(10);
+      .limit(reg.trim() ? 10 : 50);
+    if (reg.trim()) query = query.ilike("vehicle_reg", reg.trim());
+    const { data } = await query;
     setHistory((data as SavedChecklist[]) ?? []);
     setLoadingHistory(false);
   }, []);
@@ -614,18 +615,17 @@ export default function ChecklistaPage() {
         </div>
 
         {/* ── HISTORIA ── */}
-        {vehicleReg.trim().length >= 2 && (
-          <div className="no-print">
-            <h2 className="text-lg font-bold text-slate-700 mb-3">
-              Historia checklisty — {vehicleReg.toUpperCase()}
-            </h2>
-            {loadingHistory ? (
-              <div className="text-sm text-slate-400">Ładowanie…</div>
-            ) : history.length === 0 ? (
-              <div className="text-sm text-slate-400 bg-slate-50 rounded-lg p-4">
-                Brak zapisanych checklisty dla tego pojazdu.
-              </div>
-            ) : (
+        <div className="no-print">
+          <h2 className="text-lg font-bold text-slate-700 mb-3">
+            {vehicleReg.trim() ? `Historia checklisty — ${vehicleReg.toUpperCase()}` : "Historia checklisty — cała flota"}
+          </h2>
+          {loadingHistory ? (
+            <div className="text-sm text-slate-400">Ładowanie…</div>
+          ) : history.length === 0 ? (
+            <div className="text-sm text-slate-400 bg-slate-50 rounded-lg p-4">
+              {vehicleReg.trim() ? "Brak zapisanych checklisty dla tego pojazdu." : "Brak zapisanych checklist."}
+            </div>
+          ) : (
               <div className="space-y-2">
                 {history.map((c) => {
                   const cOk   = (c.items as ChecklistItem[]).filter((i) => i.status === "ok").length;
@@ -638,6 +638,11 @@ export default function ChecklistaPage() {
                                  items-center gap-3 cursor-pointer hover:border-[#1F3864] transition-colors"
                       onClick={() => loadSaved(c)}
                     >
+                      {!vehicleReg.trim() && (
+                        <span className="font-mono text-xs font-semibold text-blue-700 bg-blue-100 px-2 py-0.5 rounded">
+                          {c.vehicle_reg}
+                        </span>
+                      )}
                       <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
                         c.checklist_type === "initial"
                           ? "bg-blue-100 text-blue-700"
@@ -671,9 +676,8 @@ export default function ChecklistaPage() {
                   );
                 })}
               </div>
-            )}
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </>
   );
