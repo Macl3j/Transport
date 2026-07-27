@@ -67,13 +67,18 @@ export default function FleetPage() {
 
   async function saveVehicle(v: Vehicle) {
     setSaving(true);
+    // Netto puste, a brutto wypełnione → wylicz netto (brutto / 1.23),
+    // bo cała aplikacja (kalkulator, budżet, koła) czyta leasing_eur_mo
+    const netto = v.leasing_eur_mo == null && v.leasing_brutto_eur_mo != null
+      ? Math.round(v.leasing_brutto_eur_mo / 1.23 * 100) / 100
+      : v.leasing_eur_mo;
     await supabase.from("vehicles").update({
       brand:                v.brand,
       model:                v.model,
       year_produced:        v.year_produced,
       odometer_km:          v.odometer_km,
       avg_fuel_l100:        v.avg_fuel_l100,
-      leasing_eur_mo:       v.leasing_eur_mo,
+      leasing_eur_mo:       netto,
       leasing_brutto_eur_mo: v.leasing_brutto_eur_mo,
       insurance_eur_mo:     v.insurance_eur_mo,
       service_cost_km:      v.service_cost_km,
@@ -404,6 +409,12 @@ export default function FleetPage() {
                     <div>
                       <span className="font-medium text-slate-700">{fmt(Math.round(v.leasing_eur_mo))} EUR</span>
                       {v.leasing_brutto_eur_mo && <div className="text-xs text-slate-400">brutto: {fmt(Math.round(v.leasing_brutto_eur_mo))}</div>}
+                    </div>
+                  ) : v.leasing_brutto_eur_mo && v.leasing_brutto_eur_mo > 50 ? (
+                    // Wypełnione tylko brutto — pokaż netto wyliczone (brutto / 1.23)
+                    <div>
+                      <span className="font-medium text-slate-700">{fmt(Math.round(v.leasing_brutto_eur_mo / 1.23))} EUR</span>
+                      <div className="text-xs text-slate-400">brutto: {fmt(Math.round(v.leasing_brutto_eur_mo))} (netto wyliczone)</div>
                     </div>
                   ) : <span className="text-slate-400 text-xs">brak / spłacony</span>}
                 </td>
