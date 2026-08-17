@@ -15,6 +15,7 @@ const TRANSPORT_LINKS: { href: string; label: string }[] = [
   { href: "/fms",           label: "FMS" },
   { href: "/ubezpieczenia", label: "Ubezpieczenia" },
   { href: "/dyspozytorzy",  label: "Dyspozytorzy" },
+  { href: "/crm",           label: "CRM" },
   { href: "/kola",          label: "Kółka" },
   { href: "/serwis",        label: "Serwis" },
   { href: "/opony",         label: "Opony" },
