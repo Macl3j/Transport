@@ -34,6 +34,8 @@ interface MonthData {
   kartotekaFileName: string;
   kartotekaTotal: number;    // EUR
   kartotekaEntries: ExpenseEntry[];
+  kartotekaExcludedEur: number;    // wykluczeni dostawcy nieflotowi
+  kartotekaExcludedCount: number;
   // ODS Kierowcy
   odsLoaded: boolean;
   odsFileName: string;
@@ -53,6 +55,7 @@ function emptyMonth(label: string): MonthData {
     tmsLoaded: false, tmsFileName: "", tmsRevenue: 0, tmsRoutes: [],
     tmsBuf: null, tmsAvailableMonths: [],
     kartotekaLoaded: false, kartotekaFileName: "", kartotekaTotal: 0, kartotekaEntries: [],
+    kartotekaExcludedEur: 0, kartotekaExcludedCount: 0,
     odsLoaded: false, odsFileName: "", drivers: null, driversCostEur: 0, plnEurRate: 4.25,
     adminLoaded: false, adminFileName: "", adminTotal: 0, adminRows: [],
   };
@@ -529,6 +532,8 @@ export default function ZarzadPage() {
           kartotekaFileName: name,
           kartotekaTotal: Math.round(total * 100) / 100,
           kartotekaEntries: filteredEntries,
+          kartotekaExcludedEur: result.excludedEur,
+          kartotekaExcludedCount: result.excludedCount,
           label: months[idx].label.startsWith("Miesiąc") && result.months[0]
             ? result.months[0]
             : months[idx].label,
@@ -741,6 +746,11 @@ export default function ZarzadPage() {
                   {m.kartotekaLoaded && (
                     <div>
                       🚛 Koszty pojazdu: <strong>{fmtEur(m.kartotekaTotal)}</strong>
+                    </div>
+                  )}
+                  {m.kartotekaLoaded && m.kartotekaExcludedCount > 0 && (
+                    <div className="text-amber-600">
+                      ⚠ Wykluczono {m.kartotekaExcludedCount} wierszy nieflotowych ({fmtEur(m.kartotekaExcludedEur)})
                     </div>
                   )}
                   {m.odsLoaded && m.drivers && (

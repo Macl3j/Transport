@@ -467,6 +467,7 @@ export default function BudzetPage() {
   const [karFilename,  setKarFilename]  = useState("");
   const [loading,      setLoading]      = useState(false);
   const [error,        setError]        = useState<string | null>(null);
+  const [karExcluded,  setKarExcluded]  = useState<{ eur: number; count: number } | null>(null);
 
   // Budget result
   const [result,  setResult]  = useState<FleetBudgetResult | null>(null);
@@ -562,6 +563,7 @@ export default function BudzetPage() {
       const buf = await file.arrayBuffer();
       const parsed = parseKartotekaXLS(buf, settings.plnEurRate ?? 4.25);
       setExpenseMap(parsed.expenseMap);
+      setKarExcluded(parsed.excludedCount > 0 ? { eur: parsed.excludedEur, count: parsed.excludedCount } : null);
       computeBudget(parsed.expenseMap, actualMap, vehicles, budgetSettings, tmsRoutes);
     } catch (e) {
       setError(`Błąd parsowania Kartoteki: ${e instanceof Error ? e.message : String(e)}`);
@@ -682,6 +684,11 @@ export default function BudzetPage() {
             color="purple"
           />
         </div>
+        {karExcluded && (
+          <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            ⚠ Wykluczono {karExcluded.count} wierszy dostawców nieflotowych ({eur(karExcluded.eur)}) — nie wliczono do kosztów floty
+          </div>
+        )}
 
         {/* Budget parameters */}
         <details className="group">

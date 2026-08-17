@@ -65,7 +65,23 @@ const COL = {
   currency:     8,   // waluta ("EUR" | "PLN")
   euroVal:      17,  // euro — value already in EUR (may be 0 or missing)
   exchangeRate: 18,  // kurs NBP: PLN/EUR (~4.25) for EUR rows; PLN/100HUF (~1.19) for HUF; PLN/unit for CZK/RON/SEK; 1.0 for PLN
+  seller:       12,  // sprzedawca
 } as const;
+
+// ── Dostawcy wykluczeni z kosztów floty ────────────────────────
+// Koszty nieflotowe (np. roboty budowlane) księgowane w tej samej
+// Kartotece Wydatków bez przypisanego pojazdu trafiały do puli "INNE"
+// i były proporcjonalnie rozdzielane na wszystkie pojazdy floty.
+// Dopasowanie: wszystkie fragmenty (case-insensitive) muszą wystąpić
+// w kolumnie "Sprzedawca".
+const EXCLUDED_SELLERS: string[][] = [
+  ["hurst", "banaszkiewicz"],
+];
+
+function isExcludedSeller(sellerRaw: string): boolean {
+  const s = sellerRaw.toLowerCase();
+  return EXCLUDED_SELLERS.some(parts => parts.every(p => s.includes(p)));
+}
 
 // ── Date helpers ──────────────────────────────────────────────
 /** Excel serial → "YYYY-MM" */
@@ -131,6 +147,8 @@ export interface ParseExpenseResult {
   totalEur:   number;
   warnings:   string[];
   inneRedistributedEur: number;  // total EUR redistributed from "INNE" entries
+  excludedEur:   number;  // total EUR pominięte (wykluczeni dostawcy — koszty nieflotowe)
+  excludedCount: number;  // liczba pominiętych wierszy
 }
 
 export function parseKartotekaXLS(
@@ -145,6 +163,8 @@ export function parseKartotekaXLS(
   const entries: ExpenseEntry[] = [];
   const warnings: string[] = [];
   const expenseMap: ExpenseMap = new Map();
+  let excludedEur = 0;
+  let excludedCount = 0;
 
   // Find header row — look for "nr_rejestracyjny" or "rejestracyjny"
   let dataStartRow = 1;
@@ -210,6 +230,15 @@ export function parseKartotekaXLS(
     }
 
     if (amountEur <= 0) continue;
+
+    // Dostawca nieflotowy (np. roboty budowlane) — pomiń całkowicie,
+    // żeby nie trafiał do puli "INNE" i nie był rozdzielany na pojazdy
+    const sellerRaw = String(row[COL.seller] ?? "").trim();
+    if (isExcludedSeller(sellerRaw)) {
+      excludedEur = Math.round((excludedEur + amountEur) * 100) / 100;
+      excludedCount++;
+      continue;
+    }
 
     const vehicleReg = resolvedReg === "INNE" ? "INNE" : normalizeReg(resolvedReg);
     const entry: ExpenseEntry = {
@@ -300,7 +329,11 @@ export function parseKartotekaXLS(
   const vehicles = Array.from(vehicleSet).sort();
   const totalEur = Math.round(entries.reduce((s, e) => s + e.amountEur, 0) * 100) / 100;
 
-  return { entries, expenseMap, months, vehicles, totalEur, warnings, inneRedistributedEur };
+  if (excludedCount > 0) {
+    warnings.push(`Wykluczono ${excludedCount} wierszy dostawców nieflotowych: ${excludedEur.toFixed(2)} EUR`);
+  }
+
+  return { entries, expenseMap, months, vehicles, totalEur, warnings, inneRedistributedEur, excludedEur, excludedCount };
 }
 
 // ── Helper: get total cost for vehicle/month ──────────────────
