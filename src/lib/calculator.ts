@@ -197,14 +197,14 @@ export function calculateRoute(input: RouteInput, settings?: CalcSettings): Cost
   const euroMult = EURO_MULTIPLIER[euro] ?? EURO_MULTIPLIER[6];
 
   let tollCost: number;
-  const emptyKm = input.emptyKm ?? 0;
   if (input.overrideTollEur != null && input.overrideTollEur > 0) {
-    // TMS records toll for laden route only — add return toll proportionally
-    // (same road back ≈ same toll rate, scaled by empty/laden km ratio)
-    const returnToll = distanceKm > 0 && emptyKm > 0
-      ? input.overrideTollEur * (emptyKm / distanceKm)
-      : 0;
-    tollCost = input.overrideTollEur + returnToll;
+    // Realne myto z TMS — użyj wprost, bez dopisywania "korekty powrotu".
+    // Wcześniejsza wersja mnożyła overrideTollEur przez (emptyKm / distanceKm),
+    // zakładając że pusty przejazd to ta sama trasa co ładowna — przy dużej
+    // dysproporcji (np. 87 km ładownych / 337 km pustych) dawało to absurdalne
+    // zawyżenie (98,53 EUR -> 480,19 EUR, +387%), systematycznie zaniżając
+    // pokazywaną rentowność tras z długim pustym przejazdem po krótkiej dostawie.
+    tollCost = input.overrideTollEur;
   } else {
     const countries = transitCountries && transitCountries.length > 0
       ? transitCountries
