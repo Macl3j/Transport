@@ -1,11 +1,17 @@
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase";
 import { encryptSecret } from "@/lib/crmCrypto";
+import { getAuthedUser } from "@/lib/crmAuth";
 
 // Tworzy/aktualizuje login do portalu przetargowego.
 // Hasło jest szyfrowane TUTAJ (server-side) — nigdy nie trafia do bazy jawnym tekstem.
 export async function POST(req: Request) {
   try {
+    const user = await getAuthedUser(req);
+    if (!user) {
+      return NextResponse.json({ error: "Wymagane logowanie" }, { status: 401 });
+    }
+
     const body = await req.json();
     const { id, contact_id, portal_name, portal_url, username, password, notes } = body;
 
@@ -47,6 +53,11 @@ export async function POST(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
+    const user = await getAuthedUser(req);
+    if (!user) {
+      return NextResponse.json({ error: "Wymagane logowanie" }, { status: 401 });
+    }
+
     const { id } = await req.json();
     if (!id) return NextResponse.json({ error: "Brak id" }, { status: 400 });
     const supabase = createServiceClient();

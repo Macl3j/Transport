@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import type { AuthSession as Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 
 // ── Typy ─────────────────────────────────────────────────────
@@ -19,6 +20,13 @@ interface Contact {
   assigned_to: string | null;
   next_action_date: string | null;
   created_at: string;
+  created_by: string | null;
+}
+
+interface Profile {
+  id: string;
+  display_name: string | null;
+  email: string | null;
 }
 
 interface Activity {
@@ -72,10 +80,126 @@ function nextActionBadge(date: string | null) {
 }
 
 // ══════════════════════════════════════════════════════════════
-// STRONA GŁÓWNA
+// BRAMKA LOGOWANIA — dane kontrahentów dostępne tylko po zalogowaniu
 // ══════════════════════════════════════════════════════════════
 export default function CrmPage() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setCheckingSession(false);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
+      setSession(sess);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  if (checkingSession) {
+    return <div className="p-8 text-sm text-slate-400">Sprawdzam sesję…</div>;
+  }
+  if (!session) {
+    return <LoginScreen />;
+  }
+  return <CrmDashboard session={session} />;
+}
+
+function LoginScreen() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function handleLogin(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setErr(null);
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    setLoading(false);
+    if (error) {
+      setErr(error.message === "Invalid login credentials" ? "Nieprawidłowy e-mail lub hasło" : error.message);
+    }
+  }
+
+  return (
+    <div className="max-w-sm mx-auto mt-16">
+      <div className="card space-y-4">
+        <div>
+          <h1 className="text-lg font-bold text-slate-900">CRM — logowanie</h1>
+          <p className="text-sm text-slate-500 mt-1">
+            Dane kontrahentów są dostępne wyłącznie dla zalogowanych handlowców.
+          </p>
+        </div>
+        <form onSubmit={handleLogin} className="space-y-3">
+          <div>
+            <label className="label">Email</label>
+            <input className="input-field" type="email" value={email}
+              onChange={(e) => setEmail(e.target.value)} required autoFocus />
+          </div>
+          <div>
+            <label className="label">Hasło</label>
+            <input className="input-field" type="password" value={password}
+              onChange={(e) => setPassword(e.target.value)} required />
+          </div>
+          {err && <div className="text-sm text-red-600">{err}</div>}
+          <button type="submit" className="btn-primary w-full" disabled={loading}>
+            {loading ? "Loguję…" : "Zaloguj"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// PANEL UŻYTKOWNIKA — konto + zmiana hasła
+// ══════════════════════════════════════════════════════════════
+function AccountMenu({ session }: { session: Session }) {
+  const [showChangePw, setShowChangePw] = useState(false);
+  const [newPw, setNewPw] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function changePassword() {
+    if (newPw.length < 8) { setMsg("Hasło musi mieć min. 8 znaków"); return; }
+    setSaving(true);
+    const { error } = await supabase.auth.updateUser({ password: newPw });
+    setSaving(false);
+    if (error) setMsg(`Błąd: ${error.message}`);
+    else { setMsg("✓ Hasło zmienione"); setNewPw(""); setTimeout(() => setShowChangePw(false), 1200); }
+  }
+
+  return (
+    <div className="flex items-center gap-3 text-sm">
+      <span className="text-slate-500">{session.user.email}</span>
+      <button className="text-blue-600 hover:underline" onClick={() => { setShowChangePw((v) => !v); setMsg(null); }}>
+        Zmień hasło
+      </button>
+      <button className="text-slate-400 hover:text-slate-700" onClick={() => supabase.auth.signOut()}>
+        Wyloguj
+      </button>
+      {showChangePw && (
+        <div className="absolute right-6 top-14 z-10 card p-4 w-72 space-y-2">
+          <label className="label">Nowe hasło</label>
+          <input type="password" className="input-field" value={newPw} onChange={(e) => setNewPw(e.target.value)} />
+          {msg && <div className={`text-xs ${msg.startsWith("✓") ? "text-emerald-600" : "text-red-600"}`}>{msg}</div>}
+          <button className="btn-primary text-sm" disabled={saving} onClick={changePassword}>
+            {saving ? "Zapisuję…" : "Zapisz nowe hasło"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// DASHBOARD CRM (tylko dla zalogowanych)
+// ══════════════════════════════════════════════════════════════
+function CrmDashboard({ session }: { session: Session }) {
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [profiles, setProfiles] = useState<Record<string, Profile>>({});
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | ContactStatus>("all");
@@ -95,11 +219,19 @@ export default function CrmPage() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  const loadProfiles = useCallback(async () => {
+    const { data } = await supabase.from("profiles").select("id,display_name,email");
+    const map: Record<string, Profile> = {};
+    (data ?? []).forEach((p: Profile) => { map[p.id] = p; });
+    setProfiles(map);
+  }, []);
+
+  useEffect(() => { load(); loadProfiles(); }, [load, loadProfiles]);
 
   async function handleAddContact() {
     if (!newForm.company_name.trim()) return;
     setSaving(true);
+    const myName = profiles[session.user.id]?.display_name ?? session.user.email ?? "";
     const { data, error } = await supabase
       .from("crm_contacts")
       .insert({
@@ -110,6 +242,8 @@ export default function CrmPage() {
         email: newForm.email || null,
         routes: newForm.routes || null,
         status: "prospekt",
+        created_by: session.user.id,
+        assigned_to: myName || null,
       })
       .select("id")
       .single();
@@ -137,7 +271,7 @@ export default function CrmPage() {
   const overdueCount = contacts.filter((c) => c.next_action_date && c.next_action_date < todayStr()).length;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 relative">
       {/* Header */}
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
@@ -149,9 +283,12 @@ export default function CrmPage() {
             )}
           </p>
         </div>
-        <button className="btn-primary" onClick={() => setShowNew((v) => !v)}>
-          + Nowy kontakt
-        </button>
+        <div className="flex items-center gap-3">
+          <AccountMenu session={session} />
+          <button className="btn-primary" onClick={() => setShowNew((v) => !v)}>
+            + Nowy kontakt
+          </button>
+        </div>
       </div>
 
       {/* Nowy kontakt */}
@@ -262,6 +399,8 @@ export default function CrmPage() {
           <div className="flex-1 min-w-[360px]">
             <ContactDetail
               contactId={selectedId}
+              session={session}
+              profiles={profiles}
               onClose={() => setSelectedId(null)}
               onChanged={load}
             />
@@ -276,8 +415,8 @@ export default function CrmPage() {
 // PANEL SZCZEGÓŁÓW KONTAKTU
 // ══════════════════════════════════════════════════════════════
 function ContactDetail({
-  contactId, onClose, onChanged,
-}: { contactId: string; onClose: () => void; onChanged: () => void }) {
+  contactId, session, profiles, onClose, onChanged,
+}: { contactId: string; session: Session; profiles: Record<string, Profile>; onClose: () => void; onChanged: () => void }) {
   const [contact, setContact] = useState<Contact | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [form, setForm] = useState<Partial<Contact>>({});
@@ -356,7 +495,7 @@ function ContactDetail({
     try {
       const res = await fetch("/api/crm/portal", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({
           id: portalForm.id || undefined,
           contact_id: contactId,
@@ -382,7 +521,7 @@ function ContactDetail({
     if (!confirm("Usunąć ten login?")) return;
     await fetch("/api/crm/portal", {
       method: "DELETE",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
       body: JSON.stringify({ id }),
     });
     await load();
@@ -397,7 +536,7 @@ function ContactDetail({
     try {
       const res = await fetch("/api/crm/portal/reveal", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({ id }),
       });
       const json = await res.json();
@@ -426,6 +565,11 @@ function ContactDetail({
           <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_COLORS[contact.status]}`}>
             {STATUS_LABELS[contact.status]}
           </span>
+          {contact.created_by && (
+            <div className="text-xs text-slate-400 mt-1">
+              Dodane przez: {profiles[contact.created_by]?.display_name ?? profiles[contact.created_by]?.email ?? "—"}
+            </div>
+          )}
         </div>
         <div className="flex gap-2">
           {!editMode && (
