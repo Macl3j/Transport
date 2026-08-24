@@ -4,6 +4,7 @@ import { useState, useRef, useCallback } from "react";
 import * as XLSX from "xlsx";
 import { parseKartotekaXLS, type ExpenseEntry } from "@/lib/expenseParser";
 import { parseDriversODS, type DriversSummary } from "@/lib/odsParser";
+import { FLEET } from "@/lib/calculator";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -12,6 +13,8 @@ interface TmsRoute {
   frachtEur: number;
   distanceKm: number;
   totalCostEur: number;
+  totalKm: number;         // km ładowne+puste (licznik, fallback mapa) — do utylizacji
+  deliveryExcel: number | null;  // excel serial daty dostarczenia — do wyznaczenia rozpiętości okresu
 }
 
 interface AdminCostRow {
@@ -92,6 +95,8 @@ function parseTmsRevenue(
 
   // Detect header row and column indices
   let frachtCol = -1, vehicleCol = -1, distCol = -1, dateCol = -1;
+  // Utylizacja: km rzeczywiste (licznik) ładowne+puste, z fallbackiem na km wg mapy suma
+  let kmLadLicznikCol = -1, kmPusteLicznikCol = -1, kmMapaSumaCol = -1;
   let headerRow = -1;
 
   // Priority keywords for fracht column (most specific first)
@@ -152,6 +157,10 @@ function parseTmsRevenue(
       if ((s.includes("pojazd") || s.includes("nr rej") || s.includes("ciągnik") || s.includes("ciagnik")) && vehicleCol === -1) vehicleCol = i;
       // Prefer "km ład" (loaded km); avoid picking "puste" (empty run km)
       if (distCol === -1 && (s.includes("km ład") || s === "km" || s.includes("km wg"))) distCol = i;
+      // Utylizacja floty: km rzeczywiste wg licznika (ładowne + puste), fallback km wg mapy suma
+      if (kmLadLicznikCol === -1 && s.includes("kilometry lad") && s.includes("licznik")) kmLadLicznikCol = i;
+      if (kmPusteLicznikCol === -1 && s.includes("kilometry puste") && s.includes("licznik")) kmPusteLicznikCol = i;
+      if (kmMapaSumaCol === -1 && s.includes("km wg") && s.includes("mapy") && s.includes("suma")) kmMapaSumaCol = i;
     });
     // Date priority: 1) "Dostarczenie rzeczywiste" (actual delivery), 2) "Dostarczenie" (planned delivery),
     // 3) other date columns, 4) any "data" fallback
@@ -233,13 +242,21 @@ function parseTmsRevenue(
         ? parseFloat(String(row[distCol] ?? "0").replace(",", ".")) || 0
         : 0;
 
+    // Utylizacja: km rzeczywiste licznik (ład.+puste), fallback km wg mapy suma gdy licznik pusty
+    const kmLadLicznik = kmLadLicznikCol >= 0 ? Number(row[kmLadLicznikCol]) || 0 : 0;
+    const kmPusteLicznik = kmPusteLicznikCol >= 0 ? Number(row[kmPusteLicznikCol]) || 0 : 0;
+    let totalKm = kmLadLicznik + kmPusteLicznik;
+    if (totalKm === 0 && kmMapaSumaCol >= 0) totalKm = Number(row[kmMapaSumaCol]) || 0;
+
     // Date for label detection + month filter
     let rowMonth = "";
+    let deliveryExcel: number | null = null;
     if (dateCol >= 0 && row[dateCol]) {
       const ds = String(row[dateCol]).trim();
       const n = parseFloat(ds);
       // Ensure it's not parsing purely a year like "2026-06" as n=2026
       if (!isNaN(n) && n > 40000 && String(n) === ds) {
+        deliveryExcel = n;
         const d = new Date((n - 25569) * 86400 * 1000);
         rowMonth = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
       } else {
@@ -269,7 +286,7 @@ function parseTmsRevenue(
 
     if (fracht > 0) {
       revenue += fracht;
-      routes.push({ vehicle, frachtEur: fracht, distanceKm: dist, totalCostEur: 0 });
+      routes.push({ vehicle, frachtEur: fracht, distanceKm: dist, totalCostEur: 0, totalKm, deliveryExcel });
     }
   }
 
@@ -449,6 +466,7 @@ export default function ZarzadPage() {
   const [activeTab, setActiveTab] = useState(0);
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [showDrivers, setShowDrivers] = useState(false);
+  const [showUtilization, setShowUtilization] = useState(true);
   const [showAdmin, setShowAdmin] = useState(false);
   const [showUpload, setShowUpload] = useState(true);
 
@@ -620,6 +638,51 @@ export default function ZarzadPage() {
 
   const pnls = months.map(calcPnl);
   const anyData = pnls.some((p) => p.hasData);
+
+  // ── Utylizacja floty: km rzeczywiste vs. potencjał (FLEET.driverKmPerDay × dni robocze) ──
+  function calcUtilization(m: MonthData) {
+    if (!m.tmsLoaded || m.tmsRoutes.length === 0) return null;
+
+    const byVeh = new Map<string, { km: number; routes: number }>();
+    let minExcel = Infinity, maxExcel = -Infinity;
+    for (const r of m.tmsRoutes) {
+      if (!r.vehicle) continue;
+      const cur = byVeh.get(r.vehicle) ?? { km: 0, routes: 0 };
+      cur.km += r.totalKm;
+      cur.routes += 1;
+      byVeh.set(r.vehicle, cur);
+      if (r.deliveryExcel != null) {
+        if (r.deliveryExcel < minExcel) minExcel = r.deliveryExcel;
+        if (r.deliveryExcel > maxExcel) maxExcel = r.deliveryExcel;
+      }
+    }
+    if (byVeh.size === 0) return null;
+
+    // Rozpiętość okresu z rzeczywistych dat dostarczenia (obsługuje pełne i niepełne miesiące)
+    const spanDays = Number.isFinite(minExcel) && Number.isFinite(maxExcel)
+      ? Math.max(1, Math.round(maxExcel - minExcel) + 1)
+      : 30;
+    const workDays = FLEET.driverWorkDaysPerMonth * (spanDays / 30.44);
+    const capPerVehicle = workDays * FLEET.driverKmPerDay;
+
+    const vehicles = Array.from(byVeh.entries())
+      .map(([vehicle, d]) => ({
+        vehicle,
+        km: d.km,
+        routes: d.routes,
+        pct: capPerVehicle > 0 ? (d.km / capPerVehicle) * 100 : 0,
+      }))
+      .sort((a, b) => b.km - a.km);
+
+    const totalKm = vehicles.reduce((s, v) => s + v.km, 0);
+    const overallPct = vehicles.length > 0 && capPerVehicle > 0
+      ? (totalKm / (vehicles.length * capPerVehicle)) * 100
+      : 0;
+
+    return { vehicles, totalKm, overallPct, spanDays, capPerVehicle };
+  }
+
+  const utilizations = months.map(calcUtilization);
 
   // ── Render ─────────────────────────────────────────────────
 
@@ -1101,6 +1164,84 @@ export default function ZarzadPage() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Utylizacja floty */}
+      {utilizations.some((u) => u !== null) && (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <button
+            onClick={() => setShowUtilization((v) => !v)}
+            className="w-full flex items-center justify-between px-5 py-3 border-b border-slate-100 bg-slate-50 hover:bg-slate-100"
+          >
+            <span className="text-sm font-bold text-slate-700 uppercase tracking-wider">
+              🚚 Utylizacja floty (km rzeczywiste vs. potencjał)
+            </span>
+            <span className="text-slate-400">{showUtilization ? "▲" : "▼"}</span>
+          </button>
+
+          {showUtilization && (
+            <div className="p-4 space-y-6">
+              {/* Overall summary cards */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {months.map((m, idx) => {
+                  const u = utilizations[idx];
+                  if (!u) return null;
+                  const pctColor = u.overallPct >= 90 ? "text-emerald-600" : u.overallPct >= 70 ? "text-yellow-600" : "text-red-600";
+                  return (
+                    <div key={idx} className="border border-slate-200 rounded-lg p-3">
+                      <div className="text-xs font-bold text-slate-500 uppercase mb-1">{m.label}</div>
+                      <div className={`text-2xl font-bold ${pctColor}`}>{u.overallPct.toFixed(1)}%</div>
+                      <div className="text-xs text-slate-500 mt-1 space-y-0.5">
+                        <div>{u.vehicles.length} aktywnych pojazdów · {Math.round(u.totalKm).toLocaleString("pl-PL")} km</div>
+                        <div>Śr. {Math.round(u.totalKm / u.vehicles.length).toLocaleString("pl-PL")} km/pojazd</div>
+                        <div className="text-slate-400">okres: {u.spanDays} dni · potencjał: {Math.round(u.capPerVehicle).toLocaleString("pl-PL")} km/pojazd</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Per-vehicle detail, per month */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {months.map((m, idx) => {
+                  const u = utilizations[idx];
+                  if (!u) return null;
+                  return (
+                    <div key={idx}>
+                      <h3 className="text-xs font-bold text-slate-500 uppercase mb-2">{m.label}</h3>
+                      <div className="overflow-x-auto max-h-96 overflow-y-auto border border-slate-200 rounded-lg">
+                        <table className="w-full text-xs">
+                          <thead className="bg-slate-50 sticky top-0">
+                            <tr>
+                              <th className="text-left px-2 py-1.5 font-medium text-slate-500">Pojazd</th>
+                              <th className="text-right px-2 py-1.5 font-medium text-slate-500">Km</th>
+                              <th className="text-right px-2 py-1.5 font-medium text-slate-500">Trasy</th>
+                              <th className="text-right px-2 py-1.5 font-medium text-slate-500">Wyk.</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {u.vehicles.map((v) => (
+                              <tr key={v.vehicle} className="border-t border-slate-100">
+                                <td className="px-2 py-1 text-slate-700 font-medium">{v.vehicle}</td>
+                                <td className="text-right px-2 py-1 text-slate-600">{Math.round(v.km).toLocaleString("pl-PL")}</td>
+                                <td className="text-right px-2 py-1 text-slate-600">{v.routes}</td>
+                                <td className={`text-right px-2 py-1 font-semibold ${
+                                  v.pct >= 90 ? "text-emerald-600" : v.pct >= 70 ? "text-yellow-600" : v.pct >= 40 ? "text-orange-600" : "text-red-600"
+                                }`}>
+                                  {v.pct.toFixed(0)}%
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
