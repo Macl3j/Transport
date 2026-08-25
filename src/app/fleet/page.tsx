@@ -18,6 +18,9 @@ interface Vehicle {
   service_cost_km: number | null;
   avg_km_month: number | null;
   is_active: boolean;
+  service_contract: boolean | null;
+  leasing_end_date: string | null;
+  buyout_eur: number | null;
 }
 
 type SortKey = keyof Pick<Vehicle, "reg" | "brand" | "year_produced" | "odometer_km" | "avg_fuel_l100" | "leasing_eur_mo">;
@@ -34,6 +37,7 @@ export default function FleetPage() {
   const [filterYear, setFilterYear] = useState("all");
   const [filterOdo, setFilterOdo] = useState("all");
   const [filterLeasing, setFilterLeasing] = useState("all");
+  const [filterType, setFilterType] = useState("all");
 
   // Sort
   const [sortKey, setSortKey] = useState<SortKey>("reg");
@@ -52,7 +56,7 @@ export default function FleetPage() {
     // Load ALL vehicles — no is_active filter here, we filter in UI
     const { data } = await supabase
       .from("vehicles")
-      .select("id,reg,brand,model,vehicle_type,year_produced,odometer_km,avg_fuel_l100,leasing_eur_mo,leasing_brutto_eur_mo,insurance_eur_mo,service_cost_km,avg_km_month,is_active")
+      .select("id,reg,brand,model,vehicle_type,year_produced,odometer_km,avg_fuel_l100,leasing_eur_mo,leasing_brutto_eur_mo,insurance_eur_mo,service_cost_km,avg_km_month,is_active,service_contract,leasing_end_date,buyout_eur")
       .order("vehicle_type,reg");
     setVehicles(data ?? []);
     setLoading(false);
@@ -75,6 +79,7 @@ export default function FleetPage() {
     await supabase.from("vehicles").update({
       brand:                v.brand,
       model:                v.model,
+      vehicle_type:         v.vehicle_type,
       year_produced:        v.year_produced,
       odometer_km:          v.odometer_km,
       avg_fuel_l100:        v.avg_fuel_l100,
@@ -83,6 +88,9 @@ export default function FleetPage() {
       insurance_eur_mo:     v.insurance_eur_mo,
       service_cost_km:      v.service_cost_km,
       avg_km_month:         v.avg_km_month,
+      service_contract:     v.service_contract,
+      leasing_end_date:     v.leasing_end_date,
+      buyout_eur:           v.buyout_eur,
     }).eq("id", v.id);
     setSaving(false);
     setEditVehicle(null);
@@ -97,6 +105,19 @@ export default function FleetPage() {
         <span className="text-xs text-slate-500">{label}{unit ? ` (${unit})` : ""}</span>
         <input type="number" step={step} value={val ?? ""}
           onChange={e => setEditVehicle({...editVehicle, [field]: e.target.value ? +e.target.value : null})}
+          className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+      </label>
+    );
+  }
+
+  function dateField(label: string, field: keyof Vehicle) {
+    if (!editVehicle) return null;
+    const val = editVehicle[field] as string | null;
+    return (
+      <label className="block">
+        <span className="text-xs text-slate-500">{label}</span>
+        <input type="date" value={val ?? ""}
+          onChange={e => setEditVehicle({...editVehicle, [field]: e.target.value || null})}
           className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
       </label>
     );
@@ -138,6 +159,7 @@ export default function FleetPage() {
         (v.model ?? "").toLowerCase().includes(q)
       );
     }
+    if (filterType !== "all") list = list.filter(v => v.vehicle_type === filterType);
     if (filterBrand !== "all") list = list.filter(v => v.brand === filterBrand);
     if (filterYear !== "all") list = list.filter(v => v.year_produced?.toString() === filterYear);
     if (filterOdo === "critical") list = list.filter(v => (v.odometer_km ?? 0) >= 900_000);
@@ -156,7 +178,7 @@ export default function FleetPage() {
     });
 
     return list;
-  }, [vehicles, search, filterBrand, filterYear, filterOdo, filterLeasing, sortKey, sortDesc]);
+  }, [vehicles, search, filterType, filterBrand, filterYear, filterOdo, filterLeasing, sortKey, sortDesc]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDesc(d => !d);
@@ -188,11 +210,11 @@ export default function FleetPage() {
   };
 
   const resetFilters = () => {
-    setSearch(""); setFilterBrand("all"); setFilterYear("all");
+    setSearch(""); setFilterType("all"); setFilterBrand("all"); setFilterYear("all");
     setFilterOdo("all"); setFilterLeasing("all");
     // Don't reset filterActive — user picks that intentionally
   };
-  const hasFilters = search || filterBrand !== "all" || filterYear !== "all" || filterOdo !== "all" || filterLeasing !== "all";
+  const hasFilters = search || filterType !== "all" || filterBrand !== "all" || filterYear !== "all" || filterOdo !== "all" || filterLeasing !== "all";
 
   // Stats (always on active vehicles for KPI bar)
   const activeVehicles = vehicles.filter(v => v.is_active);
@@ -291,6 +313,17 @@ export default function FleetPage() {
             />
           </div>
 
+          {/* Type: ciągnik/naczepa */}
+          <div>
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">Typ</label>
+            <select value={filterType} onChange={e => setFilterType(e.target.value)}
+              className="px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+              <option value="all">Wszystkie typy</option>
+              <option value="ciągnik">Ciągnik</option>
+              <option value="naczepa">Naczepa</option>
+            </select>
+          </div>
+
           {/* Brand */}
           <div>
             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">Marka</label>
@@ -347,6 +380,7 @@ export default function FleetPage() {
         <table className="w-full text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
+              <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500 uppercase w-12">LP</th>
               {([
                 ["reg", "Rejestracja"],
                 ["brand", "Marka / Model"],
@@ -361,20 +395,23 @@ export default function FleetPage() {
                   {label}<SortIcon k={key} />
                 </th>
               ))}
+              <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Typ</th>
               <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Ubezp. EUR/mc</th>
+              <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Umowa serwisowa</th>
               <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Status</th>
               <th className="text-center px-4 py-3 text-xs font-semibold text-slate-400 uppercase w-20"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {filtered.length === 0 ? (
-              <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400 text-sm">Brak pojazdów spełniających kryteria</td></tr>
-            ) : filtered.map(v => (
+              <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-400 text-sm">Brak pojazdów spełniających kryteria</td></tr>
+            ) : filtered.map((v, i) => (
               <tr key={v.id} className={`transition-colors ${
                 !v.is_active
                   ? "opacity-50 bg-slate-50 hover:bg-slate-100"
                   : `hover:bg-slate-50 ${odoColor(v.odometer_km)}`
               }`}>
+                <td className="px-4 py-3 text-center text-slate-400 text-xs font-mono">{i + 1}</td>
                 <td className="px-4 py-3 font-mono font-semibold text-slate-800">
                   {v.reg}
                   {!v.is_active && (
@@ -419,9 +456,23 @@ export default function FleetPage() {
                   ) : <span className="text-slate-400 text-xs">brak / spłacony</span>}
                 </td>
                 <td className="px-4 py-3 text-center">
+                  <span className={`px-2 py-0.5 text-xs font-medium rounded ${
+                    v.vehicle_type === "naczepa" ? "bg-indigo-50 text-indigo-700" : "bg-slate-100 text-slate-600"
+                  }`}>
+                    {v.vehicle_type === "naczepa" ? "Naczepa" : v.vehicle_type === "ciągnik" ? "Ciągnik" : "—"}
+                  </span>
+                </td>
+                <td className="px-4 py-3 text-center">
                   {v.insurance_eur_mo && v.insurance_eur_mo > 0
                     ? <span className="text-slate-700 text-sm">{fmt(Math.round(v.insurance_eur_mo))}</span>
                     : <span className="text-slate-400 text-xs">—</span>}
+                </td>
+                <td className="px-4 py-3 text-center">
+                  <span className={`px-2 py-0.5 text-xs font-medium rounded ${
+                    v.service_contract ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"
+                  }`}>
+                    {v.service_contract ? "Tak" : "Nie"}
+                  </span>
                 </td>
                 {/* Toggle active/inactive */}
                 <td className="px-4 py-3 text-center">
@@ -483,6 +534,15 @@ export default function FleetPage() {
               <div className="col-span-2 border-t pt-3">
                 <p className="text-xs font-bold text-slate-600 uppercase tracking-wide mb-2">📋 Dane podstawowe</p>
               </div>
+              <label className="block">
+                <span className="text-xs text-slate-500">Typ pojazdu</span>
+                <select value={editVehicle.vehicle_type ?? "ciągnik"}
+                  onChange={e => setEditVehicle({...editVehicle, vehicle_type: e.target.value})}
+                  className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+                  <option value="ciągnik">Ciągnik</option>
+                  <option value="naczepa">Naczepa</option>
+                </select>
+              </label>
               {txtField("Marka", "brand")}
               {txtField("Model", "model")}
               {numField("Rok produkcji", "year_produced")}
@@ -509,12 +569,33 @@ export default function FleetPage() {
                   </button>
                 )}
               </label>
+              {dateField("Data końca leasingu", "leasing_end_date")}
+              {numField("Kwota wykupu", "buyout_eur", "EUR", "0.01")}
 
               <div className="col-span-2 border-t pt-3">
                 <p className="text-xs font-bold text-indigo-600 uppercase tracking-wide mb-2">🛡️ Ubezpieczenie & Serwis</p>
               </div>
               {numField("OC+AC EUR/mc", "insurance_eur_mo", "EUR", "0.01")}
               {numField("Serwis EUR/km", "service_cost_km", "EUR/km", "0.001")}
+              <label className="block">
+                <span className="text-xs text-slate-500">Umowa serwisowa</span>
+                <div className="mt-1 flex gap-1 bg-slate-100 rounded-lg p-1">
+                  <button type="button"
+                    onClick={() => setEditVehicle({...editVehicle, service_contract: true})}
+                    className={`flex-1 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                      editVehicle.service_contract ? "bg-emerald-600 text-white shadow-sm" : "text-slate-500 hover:text-slate-700"
+                    }`}>
+                    Tak
+                  </button>
+                  <button type="button"
+                    onClick={() => setEditVehicle({...editVehicle, service_contract: false})}
+                    className={`flex-1 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                      !editVehicle.service_contract ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                    }`}>
+                    Nie
+                  </button>
+                </div>
+              </label>
             </div>
 
             <div className="flex gap-3 pt-2">
