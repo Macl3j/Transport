@@ -11,7 +11,20 @@ type ImportType =
   | "faktury"
   | "rejestr_transportow"
   | "trimble_fms"
+  | "przebieg_dzienny"
   | "ubezpieczenia";
+
+/** Skanuje pierwsze wiersze arkusza i znajduje ten zawierający nagłówek `hint`
+ *  (np. "Pojazd") — eksporty Trimble mają różną liczbę wierszy filtra/metadanych
+ *  przed właściwym nagłówkiem w zależności od raportu. */
+function findHeaderRow(ws: XLSX.WorkSheet, hint: string, maxScan = 10): number {
+  const raw = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: null, blankrows: true });
+  for (let i = 0; i < Math.min(maxScan, raw.length); i++) {
+    const row = raw[i];
+    if (Array.isArray(row) && row.some(cell => String(cell ?? "").trim() === hint)) return i;
+  }
+  return 0;
+}
 
 interface ImportResult {
   imported: number;
@@ -75,16 +88,24 @@ export default function ImportPanel() {
             file.name
           );
           break;
-        case "trimble_fms":
-          // Trimble report: row 0 = filter info, row 1 = empty, row 2 = headers, row 3+ = data
+        case "trimble_fms": {
+          // Trimble report: liczba wierszy filtra/metadanych przed nagłówkiem "Pojazd"
+          // różni się między eksportami — wykryj ją automatycznie.
+          const headerRow = findHeaderRow(ws, "Pojazd");
           res = await importTrimble(
-            XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, {
-              defval: null,
-              range: 2, // row index 2 = actual headers
-            }),
+            XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: null, range: headerRow }),
             file.name
           );
           break;
+        }
+        case "przebieg_dzienny": {
+          const headerRow = findHeaderRow(ws, "Przebieg (Km)");
+          res = await importPrzebieg(
+            XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: null, range: headerRow }),
+            file.name
+          );
+          break;
+        }
         case "ubezpieczenia":
           res = await importUbezpieczenia(
             XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: null }),
@@ -137,6 +158,7 @@ export default function ImportPanel() {
             <option value="faktury">Faktury wystawione (przychody)</option>
             <option value="rejestr_transportow">Rejestr transportów (zlecenia)</option>
             <option value="trimble_fms">Zużycie paliwa FMS (Trimble)</option>
+            <option value="przebieg_dzienny">Przebieg dzienny (Tabela Raportu Przebiegu)</option>
             <option value="ubezpieczenia">Rejestr ubezpieczeń</option>
           </select>
         </div>
@@ -199,6 +221,7 @@ export default function ImportPanel() {
           <li><strong>Faktury przychodowe:</strong> Status płatności, Numer, Data, Kontrahent, Netto PLN, Brutto PLN, Transport</li>
           <li><strong>Rejestr transportów:</strong> Stan, Nr pełny, Ciągnik, Naczepa, Kierowca, Fracht, Zał./Roz. kraj, Km, Marża</li>
           <li><strong>Zużycie paliwa FMS:</strong> Raport Trimble — Pojazd, Kierowca, Data, Jazda l/100km, Bieg jałowy, PTO, Całkowity</li>
+          <li><strong>Przebieg dzienny:</strong> Tabela Raportu Przebiegu — Pojazd, Data, Przebieg (Km); aktualizuje licznik na karcie pojazdu najnowszym odczytem</li>
           <li><strong>Rejestr ubezpieczeń:</strong> Nr polisy, Typ (OC/AC/NNW), Nr rej., Marka, Model, VIN, Data początku/końca, Koszt PLN</li>
         </ul>
       </div>
@@ -690,6 +713,43 @@ async function importTrimble(
     "vehicle_reg,report_date,driver_name"
   );
   return { ...res, skipped: res.skipped + skipped };
+}
+
+// ─── Przebieg dzienny importer (Tabela Raportu Przebiegu) ─────
+// Oczekiwane nagłówki: Date, Znacznik Czasu, Pojazd, Przebieg (Km), Ulica, Miasto, Kod Pocztowy, Kraj, Poziom Paliwa w %
+// Dla każdego pojazdu bierzemy odczyt z najpóźniejszej daty i aktualizujemy vehicles.odometer_km.
+
+async function importPrzebieg(
+  rows: Record<string, unknown>[],
+  _filename: string
+): Promise<ImportResult> {
+  let skipped = 0;
+  const latest: Record<string, { ts: number; odometer: number }> = {};
+
+  for (const row of rows) {
+    const rawVeh = strOrNull(row["Pojazd"]);
+    const odometer = numOrNull(row["Przebieg (Km)"] ?? row["Przebieg (km)"] ?? row["Przebieg"]);
+    const ts = numOrNull(row["Znacznik Czasu"] ?? row["Date"] ?? row["Data"]);
+    if (!rawVeh || odometer === null || ts === null) { skipped++; continue; }
+
+    const vehicleReg = rawVeh.split("_")[0].trim().toUpperCase();
+    if (!latest[vehicleReg] || ts > latest[vehicleReg].ts) {
+      latest[vehicleReg] = { ts, odometer };
+    }
+  }
+
+  let imported = 0;
+  const errors: string[] = [];
+  for (const [reg, data] of Object.entries(latest)) {
+    const { error } = await supabase
+      .from("vehicles")
+      .update({ odometer_km: Math.round(data.odometer) })
+      .eq("reg", reg);
+    if (error) { errors.push(`${reg}: ${error.message}`); skipped++; }
+    else imported++;
+  }
+
+  return { imported, skipped, errors };
 }
 
 // ─── Rejestr ubezpieczeń importer ────────────────────────────

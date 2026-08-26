@@ -270,9 +270,10 @@ export default function FleetPage() {
         </div>
       </div>
 
-      {/* KPI mini */}
+      {/* KPI mini — klikalne: filtrują tabelę wg przebiegu */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="card py-3">
+        <button type="button" onClick={() => setFilterOdo("all")}
+          className={`card py-3 text-left transition-shadow ${filterOdo === "all" ? "ring-2 ring-blue-400" : "hover:shadow-md"}`}>
           <p className="text-xs text-slate-500 uppercase tracking-wide">Łącznie aktywnych</p>
           <p className="text-2xl font-bold text-slate-800 mt-0.5">{activeVehicles.length}</p>
           <p className="text-xs text-slate-400">
@@ -280,17 +281,19 @@ export default function FleetPage() {
               ? <span className="text-slate-500">{inactiveCount} wyłączonych z eksploatacji</span>
               : "wszystkie w eksploatacji"}
           </p>
-        </div>
-        <div className={`card py-3 ${critical > 0 ? "border-l-4 border-red-500" : ""}`}>
+        </button>
+        <button type="button" onClick={() => setFilterOdo(filterOdo === "critical" ? "all" : "critical")}
+          className={`card py-3 text-left transition-shadow ${critical > 0 ? "border-l-4 border-red-500" : ""} ${filterOdo === "critical" ? "ring-2 ring-red-400" : "hover:shadow-md"}`}>
           <p className="text-xs text-slate-500 uppercase tracking-wide">Krytyczne &gt;900k km</p>
           <p className={`text-2xl font-bold mt-0.5 ${critical > 0 ? "text-red-600" : "text-slate-800"}`}>{critical}</p>
           <p className="text-xs text-slate-400">wymiana w planie</p>
-        </div>
-        <div className={`card py-3 ${warn > 0 ? "border-l-4 border-amber-500" : ""}`}>
+        </button>
+        <button type="button" onClick={() => setFilterOdo(filterOdo === "warn" ? "all" : "warn")}
+          className={`card py-3 text-left transition-shadow ${warn > 0 ? "border-l-4 border-amber-500" : ""} ${filterOdo === "warn" ? "ring-2 ring-amber-400" : "hover:shadow-md"}`}>
           <p className="text-xs text-slate-500 uppercase tracking-wide">Uwaga 700–900k km</p>
           <p className={`text-2xl font-bold mt-0.5 ${warn > 0 ? "text-amber-600" : "text-slate-800"}`}>{warn}</p>
           <p className="text-xs text-slate-400">obserwacja</p>
-        </div>
+        </button>
         <div className="card py-3">
           <p className="text-xs text-slate-500 uppercase tracking-wide">Śr. spalanie</p>
           <p className="text-2xl font-bold text-slate-800 mt-0.5">{avgFuel} <span className="text-sm font-normal">l/100km</span></p>
@@ -399,14 +402,16 @@ export default function FleetPage() {
               <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Ubezp. EUR/mc</th>
               <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Umowa serwisowa</th>
               <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Status</th>
-              <th className="text-center px-4 py-3 text-xs font-semibold text-slate-400 uppercase w-20"></th>
+              <th className="text-center px-4 py-3 text-xs font-semibold text-slate-400 uppercase w-20 sticky right-0 bg-slate-50 border-l border-slate-200"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {filtered.length === 0 ? (
               <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-400 text-sm">Brak pojazdów spełniających kryteria</td></tr>
-            ) : filtered.map((v, i) => (
-              <tr key={v.id} className={`transition-colors ${
+            ) : filtered.map((v, i) => {
+              const rowBg = !v.is_active ? "bg-slate-50" : (odoColor(v.odometer_km) || "bg-white");
+              return (
+              <tr key={v.id} className={`transition-colors group ${
                 !v.is_active
                   ? "opacity-50 bg-slate-50 hover:bg-slate-100"
                   : `hover:bg-slate-50 ${odoColor(v.odometer_km)}`
@@ -489,14 +494,15 @@ export default function FleetPage() {
                     {togglingId === v.id ? "…" : v.is_active ? "✓ Aktywny" : "Wyłączony"}
                   </button>
                 </td>
-                <td className="px-4 py-3 text-center">
+                <td className={`px-4 py-3 text-center sticky right-0 border-l border-slate-200 ${rowBg} group-hover:bg-slate-50`}>
                   <button onClick={() => setEditVehicle({...v})}
                     className="px-3 py-1 text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg font-medium transition-colors">
                     Edytuj
                   </button>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
 
