@@ -324,6 +324,7 @@ export default function FleetPage() {
               <option value="all">Wszystkie typy</option>
               <option value="ciągnik">Ciągnik</option>
               <option value="naczepa">Naczepa</option>
+              <option value="podwykonawca">Podwykonawca</option>
             </select>
           </div>
 
@@ -462,9 +463,15 @@ export default function FleetPage() {
                 </td>
                 <td className="px-4 py-3 text-center">
                   <span className={`px-2 py-0.5 text-xs font-medium rounded ${
-                    v.vehicle_type === "naczepa" ? "bg-indigo-50 text-indigo-700" : "bg-slate-100 text-slate-600"
+                    v.vehicle_type === "naczepa" ? "bg-indigo-50 text-indigo-700"
+                    : v.vehicle_type === "podwykonawca" ? "bg-amber-50 text-amber-700"
+                    : v.vehicle_type === "ciągnik" ? "bg-slate-100 text-slate-600"
+                    : "bg-slate-100 text-slate-600"
                   }`}>
-                    {v.vehicle_type === "naczepa" ? "Naczepa" : v.vehicle_type === "ciągnik" ? "Ciągnik" : "—"}
+                    {v.vehicle_type === "naczepa" ? "Naczepa"
+                      : v.vehicle_type === "ciągnik" ? "Ciągnik"
+                      : v.vehicle_type === "podwykonawca" ? "Podwykonawca"
+                      : "—"}
                   </span>
                 </td>
                 <td className="px-4 py-3 text-center">
@@ -547,6 +554,7 @@ export default function FleetPage() {
                   className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
                   <option value="ciągnik">Ciągnik</option>
                   <option value="naczepa">Naczepa</option>
+                  <option value="podwykonawca">Podwykonawca</option>
                 </select>
               </label>
               {txtField("Marka", "brand")}

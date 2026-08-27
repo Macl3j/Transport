@@ -492,7 +492,8 @@ export default function BudzetPage() {
         .select("reg, vehicle_type, leasing_eur_mo, insurance_eur_mo, service_cost_km, year_produced, avg_km_month")
         .order("reg");
       if (data) {
-        setVehicles(data.map(v => ({
+        // Pojazdy podwykonawców pomijamy całkowicie — ich koszty/leasing nie są kosztami floty B&M
+        setVehicles(data.filter(v => v.vehicle_type !== "podwykonawca").map(v => ({
           registration:    v.reg,
           vehicle_type:    v.vehicle_type === "naczepa" ? "trailer" : v.vehicle_type === "van" ? "van" : "tractor",
           leasing_eur_mo:  v.leasing_eur_mo  ? Number(v.leasing_eur_mo)  : undefined,
