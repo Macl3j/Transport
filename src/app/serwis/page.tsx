@@ -42,6 +42,7 @@ interface MaintenanceRow {
 
 type AlertLevel = "ok" | "warn" | "alert" | "overdue" | "unknown";
 type VehicleTab = "ciągnik" | "naczepa" | "all";
+type SortKey = "reg" | "km" | "oil" | "service" | "inspection" | "tires" | "brakes" | "urgency";
 
 function daysUntil(dateStr: string | null): number | null {
   if (!dateStr) return null;
@@ -113,6 +114,23 @@ function urgencyScore(r: MaintenanceRow): number {
   return scores.length ? Math.min(...scores) : 9999;
 }
 
+/** Wartość liczbowa danej kolumny do sortowania — mniejsza = bardziej pilne. Braki danych trafiają na koniec. */
+function sortMetric(r: MaintenanceRow, key: SortKey): number {
+  const ciagnik = r.vehicle_type === "ciągnik";
+  switch (key) {
+    case "km": return r.current_km ?? Infinity;
+    case "oil": return kmRem(r.last_oil_change_km, r.oil_change_interval_km, r.current_km) ?? Infinity;
+    case "service": return kmRem(r.last_service_km, r.service_interval_km, r.current_km) ?? Infinity;
+    case "inspection": return daysUntil(r.next_inspection_date) ?? Infinity;
+    case "tires": return ciagnik
+      ? kmRem(r.last_tire_change_km, r.tire_interval_km, r.current_km) ?? Infinity
+      : nextDateFromInterval(r.last_tire_date, r.tire_interval_months) ?? Infinity;
+    case "brakes": return nextDateFromInterval(r.last_brake_check_date, r.brake_check_interval_months) ?? Infinity;
+    case "urgency": return urgencyScore(r);
+    default: return 0;
+  }
+}
+
 function fmtKm(v: number | null) { return v != null ? v.toLocaleString("pl-PL") : "—"; }
 function fmtRem(rem: number | null) {
   if (rem == null) return "—";
@@ -158,6 +176,8 @@ export default function SerwisPage() {
   const [editRow, setEditRow] = useState<MaintenanceRow | null>(null);
   const [tab, setTab] = useState<VehicleTab>("ciągnik");
   const [alertFilter, setAlertFilter] = useState<"all" | "warn" | "alert" | "overdue">("all");
+  const [sortKey, setSortKey] = useState<SortKey>("urgency");
+  const [sortDesc, setSortDesc] = useState(false);
   const [uploadMsg, setUploadMsg] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
 
@@ -274,6 +294,26 @@ export default function SerwisPage() {
     });
   }, [tabRows, alertFilter]);
 
+  const sorted = useMemo(() => {
+    const list = [...filtered];
+    list.sort((a, b) => {
+      if (sortKey === "reg") {
+        const cmp = a.vehicle_reg.localeCompare(b.vehicle_reg, "pl");
+        return sortDesc ? -cmp : cmp;
+      }
+      const av = sortMetric(a, sortKey), bv = sortMetric(b, sortKey);
+      return sortDesc ? bv - av : av - bv;
+    });
+    return list;
+  }, [filtered, sortKey, sortDesc]);
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) setSortDesc(d => !d);
+    else { setSortKey(key); setSortDesc(false); }
+  }
+  const SortIcon = ({ k }: { k: SortKey }) =>
+    sortKey === k ? <span className="ml-1 text-blue-500">{sortDesc ? "↓" : "↑"}</span> : <span className="ml-1 text-slate-300">↕</span>;
+
   function countByLevel(type: "ciągnik" | "naczepa" | "all", level: "overdue" | "alert" | "warn") {
     const subset = rows.filter(r => type === "all" || r.vehicle_type === type);
     return subset.filter(r => {
@@ -356,23 +396,44 @@ export default function SerwisPage() {
         <table className="w-full text-sm min-w-[800px]">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Pojazd</th>
-              <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Przebieg</th>
+              <th onClick={() => toggleSort("reg")}
+                className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase cursor-pointer hover:text-slate-800 select-none">
+                Pojazd<SortIcon k="reg" />
+              </th>
+              <th onClick={() => toggleSort("km")}
+                className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase cursor-pointer hover:text-slate-800 select-none">
+                Przebieg<SortIcon k="km" />
+              </th>
               {(tab === "ciągnik" || tab === "all") && <>
-                <th className="text-center px-3 py-3 text-xs font-semibold text-amber-600 uppercase">🛢 Olej</th>
-                <th className="text-center px-3 py-3 text-xs font-semibold text-purple-600 uppercase">🔧 Serwis</th>
+                <th onClick={() => toggleSort("oil")}
+                  className="text-center px-3 py-3 text-xs font-semibold text-amber-600 uppercase cursor-pointer hover:opacity-70 select-none">
+                  🛢 Olej<SortIcon k="oil" />
+                </th>
+                <th onClick={() => toggleSort("service")}
+                  className="text-center px-3 py-3 text-xs font-semibold text-purple-600 uppercase cursor-pointer hover:opacity-70 select-none">
+                  🔧 Serwis<SortIcon k="service" />
+                </th>
               </>}
-              <th className="text-center px-3 py-3 text-xs font-semibold text-blue-600 uppercase">🔍 Przegląd</th>
-              <th className="text-center px-3 py-3 text-xs font-semibold text-slate-600 uppercase">🏎 Opony</th>
+              <th onClick={() => toggleSort("inspection")}
+                className="text-center px-3 py-3 text-xs font-semibold text-blue-600 uppercase cursor-pointer hover:opacity-70 select-none">
+                🔍 Przegląd<SortIcon k="inspection" />
+              </th>
+              <th onClick={() => toggleSort("tires")}
+                className="text-center px-3 py-3 text-xs font-semibold text-slate-600 uppercase cursor-pointer hover:opacity-70 select-none">
+                🏎 Opony<SortIcon k="tires" />
+              </th>
               {(tab === "naczepa" || tab === "all") &&
-                <th className="text-center px-3 py-3 text-xs font-semibold text-orange-600 uppercase">🛑 Hamulce</th>}
+                <th onClick={() => toggleSort("brakes")}
+                  className="text-center px-3 py-3 text-xs font-semibold text-orange-600 uppercase cursor-pointer hover:opacity-70 select-none">
+                  🛑 Hamulce<SortIcon k="brakes" />
+                </th>}
               <th className="text-center px-3 py-3 text-xs font-semibold text-slate-400 uppercase">Akcja</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {filtered.length === 0 ? (
+            {sorted.length === 0 ? (
               <tr><td colSpan={8} className="py-12 text-center text-slate-400 text-sm">Brak pojazdów</td></tr>
-            ) : filtered.map(r => {
+            ) : sorted.map(r => {
               const ciagnik = isCiagnik(r);
               // Ciągnik — km based
               const oilRem  = kmRem(r.last_oil_change_km, r.oil_change_interval_km, r.current_km);
@@ -453,8 +514,14 @@ export default function SerwisPage() {
             })}
           </tbody>
         </table>
-        <div className="px-4 py-2 border-t border-slate-100 bg-slate-50 text-xs text-slate-500">
-          Wyświetlono: {filtered.length} z {tabRows.length} pojazdów
+        <div className="px-4 py-2 border-t border-slate-100 bg-slate-50 text-xs text-slate-500 flex items-center justify-between">
+          <span>Wyświetlono: {sorted.length} z {tabRows.length} pojazdów</span>
+          {(sortKey !== "urgency" || sortDesc) && (
+            <button onClick={() => { setSortKey("urgency"); setSortDesc(false); }}
+              className="text-blue-600 hover:underline">
+              ↺ Sortuj wg pilności (domyślnie)
+            </button>
+          )}
         </div>
       </div>
 
