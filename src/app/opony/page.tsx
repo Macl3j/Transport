@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import {
   CIAGNIK_POSITIONS,
@@ -916,6 +916,91 @@ function StatusLegend() {
 }
 
 // ══════════════════════════════════════════════════════════════
+// Pole wyboru pojazdu z wyszukiwaniem (zamiast długiego <select>)
+// ══════════════════════════════════════════════════════════════
+function SearchableVehicleSelect({
+  vehicles,
+  value,
+  onChange,
+  placeholder = "— wybierz —",
+  allowEmpty = true,
+  emptyLabel = "— wszystkie pojazdy —",
+  renderLabel = v => `${v.reg} (${v.vehicle_type}${v.brand ? `, ${v.brand}` : ""})`,
+}: {
+  vehicles: VehicleOption[];
+  value: string;
+  onChange: (reg: string) => void;
+  placeholder?: string;
+  allowEmpty?: boolean;
+  emptyLabel?: string;
+  renderLabel?: (v: VehicleOption) => string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function onDocPointerDown(e: MouseEvent) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    }
+    document.addEventListener("mousedown", onDocPointerDown);
+    return () => document.removeEventListener("mousedown", onDocPointerDown);
+  }, []);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return vehicles;
+    return vehicles.filter(v =>
+      v.reg.toLowerCase().includes(q) || (v.brand ?? "").toLowerCase().includes(q)
+    );
+  }, [vehicles, query]);
+
+  const selected = vehicles.find(v => v.reg === value);
+  const inputValue = open ? query : (selected ? renderLabel(selected) : "");
+
+  function select(reg: string) {
+    onChange(reg);
+    setQuery("");
+    setOpen(false);
+  }
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <input
+        type="text"
+        value={inputValue}
+        onChange={e => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={() => { setQuery(""); setOpen(true); }}
+        placeholder={placeholder}
+        className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-400"
+      />
+      {open && (
+        <div className="absolute z-20 mt-1 w-full max-h-64 overflow-y-auto bg-slate-800 border border-slate-600 rounded-lg shadow-xl">
+          {allowEmpty && (
+            <button type="button" onMouseDown={e => e.preventDefault()} onClick={() => select("")}
+              className="w-full text-left px-3 py-1.5 text-sm text-slate-400 hover:bg-slate-700 border-b border-slate-700">
+              {emptyLabel}
+            </button>
+          )}
+          {filtered.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-slate-500">Brak wyników dla &quot;{query}&quot;</div>
+          ) : filtered.map(v => (
+            <button key={v.reg} type="button" onMouseDown={e => e.preventDefault()} onClick={() => select(v.reg)}
+              className={`w-full text-left px-3 py-1.5 text-sm hover:bg-slate-700 transition-colors ${
+                v.reg === value ? "bg-slate-700 text-white font-semibold" : "text-slate-200"}`}>
+              {renderLabel(v)}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
 // Formularz nowej inspekcji
 // ══════════════════════════════════════════════════════════════
 function InspectionForm({
@@ -1006,18 +1091,7 @@ function InspectionForm({
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div>
           <label className="block text-xs text-slate-400 mb-1">Pojazd *</label>
-          <select
-            value={vehicleReg}
-            onChange={e => setVehicleReg(e.target.value)}
-            className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white"
-          >
-            <option value="">— wybierz —</option>
-            {vehicles.map(v => (
-              <option key={v.reg} value={v.reg}>
-                {v.reg} ({v.vehicle_type})
-              </option>
-            ))}
-          </select>
+          <SearchableVehicleSelect vehicles={vehicles} value={vehicleReg} onChange={setVehicleReg} />
         </div>
         <div>
           <label className="block text-xs text-slate-400 mb-1">Data inspekcji</label>
@@ -1183,11 +1257,7 @@ function HistoryTab({ vehicles }: { vehicles: VehicleOption[] }) {
     <div className="space-y-4">
       <div className="w-64">
         <label className="block text-xs text-slate-400 mb-1">Pojazd (filtr opcjonalny)</label>
-        <select value={vehicleReg} onChange={e => setVehicleReg(e.target.value)}
-          className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white">
-          <option value="">— wszystkie pojazdy —</option>
-          {vehicles.map(v => <option key={v.reg} value={v.reg}>{v.reg} ({v.vehicle_type})</option>)}
-        </select>
+        <SearchableVehicleSelect vehicles={vehicles} value={vehicleReg} onChange={setVehicleReg} />
       </div>
 
       {loading && <div className="text-slate-400 text-sm">Ładowanie...</div>}
@@ -1639,19 +1709,13 @@ export default function OponyPage() {
             <div className="grid grid-cols-2 gap-4 max-w-lg">
               <div>
                 <label className="block text-xs text-slate-400 mb-1">Ciągnik</label>
-                <select value={ciagnikReg} onChange={e => { setCiagnikReg(e.target.value); setSelectedPos(null); }}
-                  className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white">
-                  <option value="">— wybierz —</option>
-                  {ciagniks.map(v => <option key={v.reg} value={v.reg}>{vehicleLabel(v)}</option>)}
-                </select>
+                <SearchableVehicleSelect vehicles={ciagniks} value={ciagnikReg}
+                  onChange={reg => { setCiagnikReg(reg); setSelectedPos(null); }} renderLabel={vehicleLabel} />
               </div>
               <div>
                 <label className="block text-xs text-slate-400 mb-1">Naczepa</label>
-                <select value={naczepReg} onChange={e => { setNaczepReg(e.target.value); setSelectedPos(null); }}
-                  className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white">
-                  <option value="">— wybierz —</option>
-                  {naczepy.map(v => <option key={v.reg} value={v.reg}>{vehicleLabel(v)}</option>)}
-                </select>
+                <SearchableVehicleSelect vehicles={naczepy} value={naczepReg}
+                  onChange={reg => { setNaczepReg(reg); setSelectedPos(null); }} renderLabel={vehicleLabel} />
               </div>
             </div>
 
