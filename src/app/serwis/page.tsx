@@ -180,6 +180,9 @@ export default function SerwisPage() {
   const [sortDesc, setSortDesc] = useState(false);
   const [uploadMsg, setUploadMsg] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [orphaned, setOrphaned] = useState<MaintenanceRow[]>([]);
+  const [showOrphaned, setShowOrphaned] = useState(false);
+  const [deletingReg, setDeletingReg] = useState<string | null>(null);
 
   useEffect(() => { loadData(); }, []);
 
@@ -188,6 +191,7 @@ export default function SerwisPage() {
     const { data: vehicles } = await supabase
       .from("vehicles").select("reg, vehicle_type, brand, year_produced, odometer_km")
       .eq("is_active", true).order("reg");
+    const { data: allVehicles } = await supabase.from("vehicles").select("reg");
     const { data: maint } = await supabase.from("maintenance").select("*");
     const maintMap: Record<string, MaintenanceRow> = {};
     for (const m of maint ?? []) maintMap[m.vehicle_reg] = m;
@@ -208,7 +212,21 @@ export default function SerwisPage() {
 
     merged.sort((a, b) => urgencyScore(a) - urgencyScore(b));
     setRows(merged);
+
+    // Wpisy w "maintenance" bez odpowiadającego pojazdu (żaden, nawet nieaktywny) — stare/błędne rejestracje
+    const allRegs = new Set((allVehicles ?? []).map(v => v.reg));
+    setOrphaned((maint ?? []).filter(m => !allRegs.has(m.vehicle_reg)));
+
     setLoading(false);
+  }
+
+  async function deleteMaintenance(reg: string) {
+    if (!confirm(`Usunąć wpis serwisowy dla "${reg}"? Tej operacji nie można cofnąć.`)) return;
+    setDeletingReg(reg);
+    await supabase.from("maintenance").delete().eq("vehicle_reg", reg);
+    setDeletingReg(null);
+    if (editRow?.vehicle_reg === reg) setEditRow(null);
+    await loadData();
   }
 
   async function handleTrimbleUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -359,6 +377,36 @@ export default function SerwisPage() {
       {uploadMsg && (
         <div className={`px-4 py-3 rounded-lg text-sm border ${uploadMsg.startsWith("✓") ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-red-50 text-red-700 border-red-200"}`}>
           {uploadMsg}
+        </div>
+      )}
+
+      {/* Wpisy bez przypisanego pojazdu (stare/błędne rejestracje z importu) */}
+      {orphaned.length > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 overflow-hidden">
+          <button onClick={() => setShowOrphaned(s => !s)}
+            className="w-full flex items-center justify-between px-4 py-2.5 text-sm font-medium text-amber-800 hover:bg-amber-100 transition-colors">
+            <span>⚠ Wpisy serwisowe bez przypisanego pojazdu ({orphaned.length})</span>
+            <span className="text-amber-500">{showOrphaned ? "▲" : "▼"}</span>
+          </button>
+          {showOrphaned && (
+            <div className="divide-y divide-amber-200 border-t border-amber-200 bg-white">
+              {orphaned.map(o => (
+                <div key={o.vehicle_reg} className="flex items-center justify-between px-4 py-2 text-sm">
+                  <div>
+                    <span className="font-mono font-semibold text-slate-700">{o.vehicle_reg}</span>
+                    <span className="text-slate-400 ml-3">
+                      {o.current_km != null ? `${fmtKm(o.current_km)} km` : "brak przebiegu"}
+                      {o.current_km_updated_at && ` · ${new Date(o.current_km_updated_at).toLocaleDateString("pl-PL")}`}
+                    </span>
+                  </div>
+                  <button onClick={() => deleteMaintenance(o.vehicle_reg)} disabled={deletingReg === o.vehicle_reg}
+                    className="px-3 py-1 text-xs bg-red-50 text-red-700 hover:bg-red-100 rounded-lg font-medium transition-colors disabled:opacity-40">
+                    {deletingReg === o.vehicle_reg ? "Usuwam…" : "Usuń"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -688,6 +736,13 @@ export default function SerwisPage() {
                 className="px-6 py-2.5 border border-slate-200 text-slate-600 text-sm rounded-lg hover:border-slate-400 transition-colors">
                 Anuluj
               </button>
+              {editRow.id && (
+                <button onClick={() => deleteMaintenance(editRow.vehicle_reg)} disabled={deletingReg === editRow.vehicle_reg}
+                  title="Usuwa cały wpis serwisowy tego pojazdu (przywraca wartości domyślne)"
+                  className="px-4 py-2.5 border border-red-200 text-red-600 text-sm rounded-lg hover:bg-red-50 disabled:opacity-40 transition-colors">
+                  {deletingReg === editRow.vehicle_reg ? "Usuwam…" : "🗑 Usuń wpis"}
+                </button>
+              )}
             </div>
           </div>
         </div>
