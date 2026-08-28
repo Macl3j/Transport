@@ -25,6 +25,17 @@ interface Vehicle {
 
 type SortKey = keyof Pick<Vehicle, "reg" | "brand" | "year_produced" | "odometer_km" | "avg_fuel_l100" | "leasing_eur_mo">;
 
+// Formularz edycji/dodawania — bez id/is_active dla nowego pojazdu (nadawane przez bazę)
+type VehicleDraft = Omit<Vehicle, "id" | "is_active"> & { id?: string; is_active?: boolean };
+
+const EMPTY_VEHICLE: VehicleDraft = {
+  reg: "", brand: null, model: null, vehicle_type: "ciągnik",
+  year_produced: null, odometer_km: null, avg_fuel_l100: null,
+  leasing_eur_mo: null, leasing_brutto_eur_mo: null, insurance_eur_mo: null,
+  service_cost_km: null, avg_km_month: null,
+  service_contract: false, leasing_end_date: null, buyout_eur: null,
+};
+
 const fmt = (n: number | null) => n != null ? n.toLocaleString("pl-PL") : "—";
 
 export default function FleetPage() {
@@ -43,8 +54,9 @@ export default function FleetPage() {
   const [sortKey, setSortKey] = useState<SortKey>("reg");
   const [sortDesc, setSortDesc] = useState(false);
 
-  const [editVehicle, setEditVehicle] = useState<Vehicle | null>(null);
+  const [editVehicle, setEditVehicle] = useState<VehicleDraft | null>(null);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
 
   // Active/inactive filter
@@ -69,14 +81,15 @@ export default function FleetPage() {
     await loadVehicles();
   }
 
-  async function saveVehicle(v: Vehicle) {
+  async function saveVehicle(v: VehicleDraft) {
     setSaving(true);
+    setSaveError(null);
     // Netto puste, a brutto wypełnione → wylicz netto (brutto / 1.23),
     // bo cała aplikacja (kalkulator, budżet, koła) czyta leasing_eur_mo
     const netto = v.leasing_eur_mo == null && v.leasing_brutto_eur_mo != null
       ? Math.round(v.leasing_brutto_eur_mo / 1.23 * 100) / 100
       : v.leasing_eur_mo;
-    await supabase.from("vehicles").update({
+    const payload = {
       brand:                v.brand,
       model:                v.model,
       vehicle_type:         v.vehicle_type,
@@ -91,13 +104,27 @@ export default function FleetPage() {
       service_contract:     v.service_contract,
       leasing_end_date:     v.leasing_end_date,
       buyout_eur:           v.buyout_eur,
-    }).eq("id", v.id);
+    };
+
+    if (v.id) {
+      const { error } = await supabase.from("vehicles").update(payload).eq("id", v.id);
+      if (error) { setSaving(false); setSaveError(error.message); return; }
+    } else {
+      const reg = v.reg.trim().toUpperCase().replace(/\s+/g, "");
+      if (!reg) { setSaving(false); setSaveError("Podaj numer rejestracyjny."); return; }
+      const { error } = await supabase.from("vehicles").insert({ ...payload, reg });
+      if (error) {
+        setSaving(false);
+        setSaveError(error.code === "23505" ? `Pojazd o rejestracji "${reg}" już istnieje.` : error.message);
+        return;
+      }
+    }
     setSaving(false);
     setEditVehicle(null);
     await loadVehicles();
   }
 
-  function numField(label: string, field: keyof Vehicle, unit = "", step = "1") {
+  function numField(label: string, field: keyof VehicleDraft, unit = "", step = "1") {
     if (!editVehicle) return null;
     const val = editVehicle[field] as number | null;
     return (
@@ -110,7 +137,7 @@ export default function FleetPage() {
     );
   }
 
-  function dateField(label: string, field: keyof Vehicle) {
+  function dateField(label: string, field: keyof VehicleDraft) {
     if (!editVehicle) return null;
     const val = editVehicle[field] as string | null;
     return (
@@ -123,7 +150,7 @@ export default function FleetPage() {
     );
   }
 
-  function txtField(label: string, field: keyof Vehicle) {
+  function txtField(label: string, field: keyof VehicleDraft) {
     if (!editVehicle) return null;
     const val = editVehicle[field] as string | null;
     return (
@@ -248,25 +275,31 @@ export default function FleetPage() {
           </p>
         </div>
 
-        {/* Active / Inactive toggle */}
-        <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1">
-          {(["active", "all", "inactive"] as const).map(opt => (
-            <button
-              key={opt}
-              onClick={() => setFilterActive(opt)}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                filterActive === opt
-                  ? opt === "inactive"
-                    ? "bg-white text-slate-500 shadow-sm"
-                    : "bg-white text-slate-800 shadow-sm"
-                  : "text-slate-500 hover:text-slate-700"
-              }`}
-            >
-              {opt === "active" ? `✅ Aktywne (${activeVehicles.length})`
-               : opt === "inactive" ? `⛔ Wyłączone (${inactiveCount})`
-               : `Wszystkie (${vehicles.length})`}
-            </button>
-          ))}
+        <div className="flex items-center gap-3">
+          {/* Active / Inactive toggle */}
+          <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1">
+            {(["active", "all", "inactive"] as const).map(opt => (
+              <button
+                key={opt}
+                onClick={() => setFilterActive(opt)}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  filterActive === opt
+                    ? opt === "inactive"
+                      ? "bg-white text-slate-500 shadow-sm"
+                      : "bg-white text-slate-800 shadow-sm"
+                    : "text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                {opt === "active" ? `✅ Aktywne (${activeVehicles.length})`
+                 : opt === "inactive" ? `⛔ Wyłączone (${inactiveCount})`
+                 : `Wszystkie (${vehicles.length})`}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => { setSaveError(null); setEditVehicle({ ...EMPTY_VEHICLE }); }}
+            className="px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-lg hover:bg-blue-700 transition-colors">
+            + Dodaj pojazd
+          </button>
         </div>
       </div>
 
@@ -502,7 +535,7 @@ export default function FleetPage() {
                   </button>
                 </td>
                 <td className={`px-4 py-3 text-center sticky right-0 border-l border-slate-200 ${rowBg} group-hover:bg-slate-50`}>
-                  <button onClick={() => setEditVehicle({...v})}
+                  <button onClick={() => { setSaveError(null); setEditVehicle({...v}); }}
                     className="px-3 py-1 text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg font-medium transition-colors">
                     Edytuj
                   </button>
@@ -536,17 +569,30 @@ export default function FleetPage() {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-bold text-slate-800">{editVehicle.reg}</h2>
+                <h2 className="text-lg font-bold text-slate-800">{editVehicle.id ? editVehicle.reg : "Nowy pojazd"}</h2>
                 <p className="text-xs text-slate-400">{editVehicle.vehicle_type ?? "pojazd"}</p>
               </div>
               <button onClick={() => setEditVehicle(null)} className="text-slate-400 hover:text-slate-700 text-xl">✕</button>
             </div>
+
+            {saveError && (
+              <div className="px-3 py-2 rounded-lg bg-red-50 text-red-700 text-sm border border-red-200">{saveError}</div>
+            )}
 
             <div className="grid grid-cols-2 gap-3">
               {/* Dane podstawowe */}
               <div className="col-span-2 border-t pt-3">
                 <p className="text-xs font-bold text-slate-600 uppercase tracking-wide mb-2">📋 Dane podstawowe</p>
               </div>
+              {!editVehicle.id && (
+                <label className="block col-span-2">
+                  <span className="text-xs text-slate-500">Nr rejestracyjny *</span>
+                  <input type="text" value={editVehicle.reg}
+                    onChange={e => setEditVehicle({...editVehicle, reg: e.target.value.toUpperCase()})}
+                    placeholder="np. PZ1A234"
+                    className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none" />
+                </label>
+              )}
               <label className="block">
                 <span className="text-xs text-slate-500">Typ pojazdu</span>
                 <select value={editVehicle.vehicle_type ?? "ciągnik"}
@@ -613,9 +659,9 @@ export default function FleetPage() {
             </div>
 
             <div className="flex gap-3 pt-2">
-              <button onClick={() => saveVehicle(editVehicle)} disabled={saving}
+              <button onClick={() => saveVehicle(editVehicle)} disabled={saving || !editVehicle.reg.trim()}
                 className="flex-1 py-2.5 bg-blue-600 text-white text-sm font-semibold rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors">
-                {saving ? "Zapisuję…" : "Zapisz zmiany"}
+                {saving ? "Zapisuję…" : editVehicle.id ? "Zapisz zmiany" : "Dodaj pojazd"}
               </button>
               <button onClick={() => setEditVehicle(null)}
                 className="px-6 py-2.5 border border-slate-200 text-slate-600 text-sm rounded-xl hover:border-slate-400 transition-colors">
