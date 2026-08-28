@@ -1580,6 +1580,8 @@ export default function OponyPage() {
 
   const ciagniks = vehicles.filter(v => v.vehicle_type === "ciągnik");
   const naczepy   = vehicles.filter(v => v.vehicle_type === "naczepa");
+  // Pojazdy podwykonawców pomijamy w Oponach — ich opony nie są nasze
+  const ownFleetVehicles = vehicles.filter(v => v.vehicle_type === "ciągnik" || v.vehicle_type === "naczepa");
 
   // ── Wczytaj dane opon ─────────────────────────────────────
   const loadTireData = useCallback(async () => {
@@ -1820,7 +1822,7 @@ export default function OponyPage() {
         {tab === "inspekcja" && (
           <div className="max-w-5xl">
             <InspectionForm
-              vehicles={vehicles}
+              vehicles={ownFleetVehicles}
               onSaved={() => {
                 loadTireData();
                 setTab("historia");
@@ -1832,7 +1834,7 @@ export default function OponyPage() {
         {/* ── HISTORIA ── */}
         {tab === "historia" && (
           <div className="max-w-4xl">
-            <HistoryTab vehicles={vehicles} />
+            <HistoryTab vehicles={ownFleetVehicles} />
           </div>
         )}
 
