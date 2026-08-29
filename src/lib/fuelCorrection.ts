@@ -25,6 +25,14 @@
 // miesięczną (COEFICIENTE G APLICABLE...) i współczynnik 0,30 dla floty
 // >=20 000 kg — oba były nieaktualne. Zweryfikowane na realnych fakturach
 // korekty paliwowej Trans Sesé S.L. za czerwiec/lipiec 2026.
+//
+// Współczynnik C dobierany automatycznie wg daty REALIZACJI transportu
+// (getFuelCoefficient) — nota metodológica Ministerstwa (2026-07-02)
+// potwierdza wprost, że to data realizacji, a nie data zawarcia umowy,
+// decyduje o tym, która wersja formuły obowiązuje, "con independencia de
+// la fecha de formalización del contrato". Zlecenia zrealizowane przed
+// wejściem w życie RDL 9/2026 (13/14.04.2026) liczone są starym
+// współczynnikiem (0,30/0,20/0,20/0,10).
 // ─────────────────────────────────────────────────────────────
 
 /** [data jako serial Excela (dni od 1899-12-30), cena €/L Pmed dla MMA>=7500kg] —
@@ -159,15 +167,45 @@ export const FUEL_COEFFICIENTS: Record<VehicleWeightClass, number> = {
   le3500: 0.20,        // D) MMA <= 3 500 kg
 };
 
+// Wartości sprzed RDL 9/2026 — z pierwotnej klauzuli umownej (Orden
+// FOM/1882/2012 przed aktualizacją). Nota metodológica Ministerstwa
+// (20260702_nota_metodologica_variacion_precio_transporte.pdf) potwierdza
+// wprost, że o tym, która wersja formuły obowiązuje, decyduje data
+// REALIZACJI transportu — "opera con independencia de la fecha de
+// formalización del contrato" — niezależnie od daty zawarcia umowy.
+export const FUEL_COEFFICIENTS_PRE_RDL9: Record<VehicleWeightClass, number> = {
+  ge20000: 0.30,
+  "35to20000": 0.20,
+  construction: 0.20,
+  le3500: 0.10,
+};
+
+/** Pierwszy tydzień (serial Excela), dla którego oficjalna tabela "COEFIC C
+ *  VARIACIÓN PRECIOS" pokazuje podniesione współczynniki RDL 9/2026 — tydzień
+ *  od poniedziałku 2026-04-13, obejmujący dzień wejścia w życie ustawy
+ *  (2026-04-14). Zlecenia realizowane wcześniej stosują starą tabelę. */
+export const RDL_9_2026_EFFECTIVE_DATE = 46125; // 2026-04-13
+
+/** Współczynnik C dla danej klasy wagowej, właściwy dla podanej daty
+ *  REALIZACJI transportu (nie daty kontraktu — zgodnie z nota metodológica). */
+export function getFuelCoefficient(weightClass: VehicleWeightClass, execDate: number): number {
+  return execDate >= RDL_9_2026_EFFECTIVE_DATE
+    ? FUEL_COEFFICIENTS[weightClass]
+    : FUEL_COEFFICIENTS_PRE_RDL9[weightClass];
+}
+
 export interface FuelCorrectionResult {
   g: number | null;          // % wariancji ON, null = brak opublikowanej ceny dla jednej z dat
   thresholdMet: boolean;     // |g| >= 5%
   deltaP: number | null;     // EUR — kwota korekty (dodatnia = dopłata, ujemna = zwrot)
   p0: number | null;         // cena referencyjna €/L w tygodniu zawarcia umowy
   p1: number | null;         // cena referencyjna €/L w tygodniu realizacji transportu
+  coef: number;              // zastosowany współczynnik C (zależny od daty realizacji)
 }
 
 /** Liczy korektę paliwową dla jednego zlecenia na podstawie dokładnych dat.
+ *  Współczynnik C dobierany jest automatycznie wg daty REALIZACJI transportu
+ *  względem wejścia w życie RDL 9/2026 (zob. getFuelCoefficient).
  *  @param contractDate data zawarcia umowy — serial Excela (dni od 1899-12-30)
  *  @param execDate      data realizacji/dostawy — serial Excela
  *  @param priceP        baza (fracht) EUR do przemnożenia przez G × coef
@@ -178,12 +216,12 @@ export function calcFuelCorrection(
   priceP: number,
   weightClass: VehicleWeightClass = "ge20000"
 ): FuelCorrectionResult {
+  const coef = getFuelCoefficient(weightClass, execDate);
   const p0 = priceOnOrAfter(contractDate);
   const p1 = priceOnOrAfter(execDate);
-  if (p0 == null || p1 == null) return { g: null, thresholdMet: false, deltaP: null, p0, p1 };
+  if (p0 == null || p1 == null) return { g: null, thresholdMet: false, deltaP: null, p0, p1, coef };
   const g = ((p1 - p0) / p0) * 100;
   const thresholdMet = Math.abs(g) >= FUEL_REVISION_THRESHOLD_PCT;
-  const coef = FUEL_COEFFICIENTS[weightClass];
   const deltaP = thresholdMet ? (g * priceP * coef) / 100 : 0;
-  return { g, thresholdMet, deltaP, p0, p1 };
+  return { g, thresholdMet, deltaP, p0, p1, coef };
 }

@@ -213,6 +213,7 @@ export default function KorektyPaliwowePage() {
       g: number | null;
       thresholdMet: boolean;
       deltaP: number | null;
+      coef: number;
     }
     interface ClientAgg {
       client: string;
@@ -235,8 +236,8 @@ export default function KorektyPaliwowePage() {
       c.count++;
       c.sumP += o.priceP;
 
-      const { g, thresholdMet, deltaP } = calcFuelCorrection(o.contractDate, o.execDate, o.priceP, weightClass);
-      c.orders.push({ ...o, g, thresholdMet, deltaP });
+      const { g, thresholdMet, deltaP, coef } = calcFuelCorrection(o.contractDate, o.execDate, o.priceP, weightClass);
+      c.orders.push({ ...o, g, thresholdMet, deltaP, coef });
 
       if (g !== null) {
         c.sumKnownP += o.priceP;
@@ -341,10 +342,10 @@ export default function KorektyPaliwowePage() {
               onChange={(e) => setWeightClass(e.target.value as VehicleWeightClass)}
               className="border border-slate-200 rounded px-2 py-1 text-xs text-slate-700"
             >
-              <option value="ge20000">≥ 20 000 kg — coef. 0,40 (standardowe TIR-y, od RDL 9/2026)</option>
-              <option value="35to20000">3 500–20 000 kg — coef. 0,30 (od RDL 9/2026)</option>
-              <option value="construction">Budowlane &gt; 3 500 kg — coef. 0,30 (od RDL 9/2026)</option>
-              <option value="le3500">≤ 3 500 kg — coef. 0,20 (od RDL 9/2026)</option>
+              <option value="ge20000">≥ 20 000 kg (standardowe TIR-y) — coef. 0,40 / 0,30 sprzed RDL 9/2026</option>
+              <option value="35to20000">3 500–20 000 kg — coef. 0,30 / 0,20 sprzed RDL 9/2026</option>
+              <option value="construction">Budowlane &gt; 3 500 kg — coef. 0,30 / 0,20 sprzed RDL 9/2026</option>
+              <option value="le3500">≤ 3 500 kg — coef. 0,20 / 0,10 sprzed RDL 9/2026</option>
             </select>
           </label>
 
@@ -402,6 +403,9 @@ export default function KorektyPaliwowePage() {
             — łącznie z parami w tym samym miesiącu (to była wcześniejsza wada przybliżenia miesięcznego). Próg
             aktywacji: |G| ≥ 5%. Wartość ujemna ΔP = zwrot na rzecz klienta, dodatnia = dopłata należna od klienta.
             Zlecenia z datą poza opublikowaną serią cenową liczą się jako "brak danych" i nie wchodzą do korekty.
+            Współczynnik C dobierany jest automatycznie wg daty <strong>realizacji</strong> transportu (nie daty
+            umowy) — zgodnie z nota metodológica Ministerstwa: zlecenia zrealizowane przed 14.04.2026 (RDL 9/2026)
+            liczone są starym współczynnikiem, późniejsze — nowym. Zobacz kolumnę „coef." w rozwinięciu klienta.
           </div>
 
           {/* Per-client table */}
@@ -450,6 +454,7 @@ export default function KorektyPaliwowePage() {
                                   <th className="py-1.5 pr-3">Realizacja</th>
                                   <th className="py-1.5 pr-3 text-right">Fracht P</th>
                                   <th className="py-1.5 pr-3 text-right">G</th>
+                                  <th className="py-1.5 pr-3 text-right">coef.</th>
                                   <th className="py-1.5 pr-3 text-right">Próg 5%</th>
                                   <th className="py-1.5 text-right">ΔP</th>
                                 </tr>
@@ -463,6 +468,9 @@ export default function KorektyPaliwowePage() {
                                     <td className="py-1 pr-3 text-right text-slate-600">{fmtEur(o.priceP)}</td>
                                     <td className="py-1 pr-3 text-right text-slate-600">
                                       {o.g !== null ? `${o.g >= 0 ? "+" : ""}${o.g.toFixed(2)}%` : <span className="text-slate-300">brak</span>}
+                                    </td>
+                                    <td className="py-1 pr-3 text-right text-slate-500" title={o.execDate < 46125 ? "sprzed RDL 9/2026" : "od RDL 9/2026"}>
+                                      {o.coef.toFixed(2)}
                                     </td>
                                     <td className="py-1 pr-3 text-right">
                                       {o.g === null ? "—" : o.thresholdMet ? <span className="text-emerald-600">TAK</span> : <span className="text-slate-400">nie</span>}
