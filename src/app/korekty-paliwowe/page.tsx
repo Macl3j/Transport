@@ -4,7 +4,8 @@ import { Fragment, useState, useRef, useCallback, useMemo } from "react";
 import * as XLSX from "xlsx";
 import {
   calcFuelCorrection,
-  G_TABLE_LAST_EXEC_MONTH,
+  excelSerialToIso,
+  PRICE_SERIES_LAST_DATE,
   type VehicleWeightClass,
 } from "@/lib/fuelCorrection";
 
@@ -13,21 +14,9 @@ import {
 interface Order {
   nr: string;
   client: string;
-  contractMonth: string; // YYYY-MM
-  execMonth: string;     // YYYY-MM
-  priceP: number;        // EUR — Fracht (baza do korekty)
-}
-
-// ── Parser: Rejestr Transportów (.xls) ──────────────────────────
-
-function excelSerialToDate(n: number): Date {
-  return new Date(Math.round((n - 25569) * 86400 * 1000));
-}
-
-function toYm(n: unknown): string | null {
-  if (typeof n !== "number") return null;
-  const d = excelSerialToDate(n);
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+  contractDate: number; // serial Excela
+  execDate: number;     // serial Excela
+  priceP: number;       // EUR — Fracht (baza do korekty)
 }
 
 /** "1234,56 EUR" | "1234.56" | number → number (EUR). PLN pozycje przeliczane po stałym fallbacku. */
@@ -84,11 +73,10 @@ function parseRejestrFile(buffer: ArrayBuffer): { orders: Order[]; error?: strin
     if (!fracht) continue;
 
     const deliveredVal = (deliveredRealCol >= 0 ? row[deliveredRealCol] : null) ?? (deliveredCol >= 0 ? row[deliveredCol] : null);
-    const execMonth = toYm(deliveredVal);
-    const contractMonth = toYm(createdCol >= 0 ? row[createdCol] : null);
-    if (!execMonth || !contractMonth) continue;
+    const contractVal = createdCol >= 0 ? row[createdCol] : null;
+    if (typeof deliveredVal !== "number" || typeof contractVal !== "number") continue;
 
-    orders.push({ nr, client, contractMonth, execMonth, priceP: fracht });
+    orders.push({ nr, client, contractDate: contractVal, execDate: deliveredVal, priceP: fracht });
   }
 
   return { orders };
@@ -99,13 +87,9 @@ function parseRejestrFile(buffer: ArrayBuffer): { orders: Order[]; error?: strin
 const fmtEur = (v: number) =>
   v.toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
 
-const MONTH_LABELS: Record<string, string> = {
-  "01": "Sty", "02": "Lut", "03": "Mar", "04": "Kwi", "05": "Maj", "06": "Cze",
-  "07": "Lip", "08": "Sie", "09": "Wrz", "10": "Paź", "11": "Lis", "12": "Gru",
-};
-const fmtMonth = (ym: string) => {
-  const [y, m] = ym.split("-");
-  return `${MONTH_LABELS[m] ?? m} ${y}`;
+const fmtDate = (serial: number) => {
+  const [y, m, d] = excelSerialToIso(serial).split("-");
+  return `${d}.${m}.${y}`;
 };
 
 // ── Main Page ────────────────────────────────────────────────
@@ -157,14 +141,19 @@ export default function KorektyPaliwowePage() {
   const analysis = useMemo(() => {
     const list = Array.from(orders.values());
 
-    interface Bucket { count: number; sumP: number; g: number | null; thresholdMet: boolean; deltaP: number }
+    interface OrderRow extends Order {
+      g: number | null;
+      thresholdMet: boolean;
+      deltaP: number | null;
+    }
     interface ClientAgg {
       client: string;
       count: number;
       sumP: number;
       sumKnownP: number;
       deltaP: number;
-      byExecMonth: Map<string, Map<string, Bucket>>; // execMonth -> contractMonth -> bucket
+      activeCount: number;
+      orders: OrderRow[];
     }
 
     const byClient = new Map<string, ClientAgg>();
@@ -172,28 +161,23 @@ export default function KorektyPaliwowePage() {
     for (const o of list) {
       let c = byClient.get(o.client);
       if (!c) {
-        c = { client: o.client, count: 0, sumP: 0, sumKnownP: 0, deltaP: 0, byExecMonth: new Map() };
+        c = { client: o.client, count: 0, sumP: 0, sumKnownP: 0, deltaP: 0, activeCount: 0, orders: [] };
         byClient.set(o.client, c);
       }
       c.count++;
       c.sumP += o.priceP;
 
-      const { g, thresholdMet, deltaP } = calcFuelCorrection(o.execMonth, o.contractMonth, o.priceP, weightClass);
+      const { g, thresholdMet, deltaP } = calcFuelCorrection(o.contractDate, o.execDate, o.priceP, weightClass);
+      c.orders.push({ ...o, g, thresholdMet, deltaP });
 
-      let execBucket = c.byExecMonth.get(o.execMonth);
-      if (!execBucket) { execBucket = new Map(); c.byExecMonth.set(o.execMonth, execBucket); }
-      let b = execBucket.get(o.contractMonth);
-      if (!b) { b = { count: 0, sumP: 0, g, thresholdMet, deltaP: 0 }; execBucket.set(o.contractMonth, b); }
-      b.count++;
-      b.sumP += o.priceP;
       if (g !== null) {
         c.sumKnownP += o.priceP;
-        if (deltaP !== null) {
-          b.deltaP += deltaP;
-          c.deltaP += deltaP;
-        }
+        if (deltaP !== null) c.deltaP += deltaP;
+        if (thresholdMet) c.activeCount++;
       }
     }
+
+    for (const c of byClient.values()) c.orders.sort((a, b) => a.execDate - b.execDate);
 
     const clients = Array.from(byClient.values()).sort((a, b) => Math.abs(b.deltaP) - Math.abs(a.deltaP));
     const grand = {
@@ -213,8 +197,10 @@ export default function KorektyPaliwowePage() {
       <div>
         <h1 className="text-2xl font-bold text-slate-800">⛽ Korekta Paliwowa — wszyscy klienci</h1>
         <p className="text-sm text-slate-500 mt-0.5">
-          Wg oficjalnego wskaźnika G (Ministerio de Transportes, Hiszpania) — Ley 15/2009 art. 38 + Orden FOM/1882/2012 cond. 3.
-          Ostatni opublikowany miesiąc realizacji: <strong>{fmtMonth(G_TABLE_LAST_EXEC_MONTH)}</strong>.
+          Wg oficjalnego wskaźnika G liczonego z TYGODNIOWEJ ceny referencyjnej ON (Ministerio de Transportes,
+          Hiszpania) — Ley 15/2009 art. 38 + Orden FOM/1882/2012 cond. 3, zaktualizowana RDL 9/2026 i 18/2026.
+          Ostatnia opublikowana cena tygodniowa: <strong>{fmtDate(PRICE_SERIES_LAST_DATE)}</strong> — zlecenia
+          z późniejszą datą realizacji lub kontraktu pokażą brak danych, dopóki seria nie zostanie odświeżona.
         </p>
       </div>
 
@@ -244,10 +230,10 @@ export default function KorektyPaliwowePage() {
               onChange={(e) => setWeightClass(e.target.value as VehicleWeightClass)}
               className="border border-slate-200 rounded px-2 py-1 text-xs text-slate-700"
             >
-              <option value="ge20000">≥ 20 000 kg — coef. 0,30 (standardowe TIR-y)</option>
-              <option value="35to20000">3 500–20 000 kg — coef. 0,20</option>
-              <option value="construction">Budowlane &gt; 3 500 kg — coef. 0,20</option>
-              <option value="le3500">≤ 3 500 kg — coef. 0,10</option>
+              <option value="ge20000">≥ 20 000 kg — coef. 0,40 (standardowe TIR-y, od RDL 9/2026)</option>
+              <option value="35to20000">3 500–20 000 kg — coef. 0,20 (niezweryfikowane po RDL 9/2026)</option>
+              <option value="construction">Budowlane &gt; 3 500 kg — coef. 0,20 (niezweryfikowane po RDL 9/2026)</option>
+              <option value="le3500">≤ 3 500 kg — coef. 0,10 (niezweryfikowane po RDL 9/2026)</option>
             </select>
           </label>
 
@@ -301,9 +287,10 @@ export default function KorektyPaliwowePage() {
           </div>
 
           <div className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-            ℹ️ Korekta liczona jest tylko dla zleceń, gdzie miesiąc zawarcia umowy różni się od miesiąca realizacji —
-            ministerstwo nie publikuje wskaźnika G dla par w tym samym miesiącu (wymagałoby to danych tygodniowych).
-            Próg aktywacji: |G| ≥ 5%. Wartość ujemna ΔP = zwrot na rzecz klienta, dodatnia = dopłata należna od klienta.
+            ℹ️ G liczone jest osobno dla każdego zlecenia, z dokładnej daty zawarcia umowy i dokładnej daty realizacji
+            — łącznie z parami w tym samym miesiącu (to była wcześniejsza wada przybliżenia miesięcznego). Próg
+            aktywacji: |G| ≥ 5%. Wartość ujemna ΔP = zwrot na rzecz klienta, dodatnia = dopłata należna od klienta.
+            Zlecenia z datą poza opublikowaną serią cenową liczą się jako "brak danych" i nie wchodzą do korekty.
           </div>
 
           {/* Per-client table */}
@@ -320,6 +307,7 @@ export default function KorektyPaliwowePage() {
                     <th className="px-4 py-2.5 font-medium text-right">Zleceń</th>
                     <th className="px-4 py-2.5 font-medium text-right">Suma frachtu</th>
                     <th className="px-4 py-2.5 font-medium text-right">Baza z G</th>
+                    <th className="px-4 py-2.5 font-medium text-right">Aktywnych (≥5%)</th>
                     <th className="px-4 py-2.5 font-medium text-right">Korekta ΔP</th>
                   </tr>
                 </thead>
@@ -335,49 +323,44 @@ export default function KorektyPaliwowePage() {
                         <td className="px-4 py-2.5 text-right text-slate-600">{c.count}</td>
                         <td className="px-4 py-2.5 text-right text-slate-600">{fmtEur(c.sumP)}</td>
                         <td className="px-4 py-2.5 text-right text-slate-400 text-xs">{fmtEur(c.sumKnownP)}</td>
+                        <td className="px-4 py-2.5 text-right text-slate-600">{c.activeCount}</td>
                         <td className={`px-4 py-2.5 text-right font-semibold ${c.deltaP > 0 ? "text-emerald-600" : c.deltaP < 0 ? "text-red-600" : "text-slate-400"}`}>
                           {c.deltaP !== 0 ? (c.deltaP >= 0 ? "+" : "") + fmtEur(c.deltaP) : "—"}
                         </td>
                       </tr>
                       {expandedClient === c.client && (
                         <tr>
-                          <td colSpan={6} className="bg-slate-50 px-4 py-3">
+                          <td colSpan={7} className="bg-slate-50 px-4 py-3">
                             <table className="w-full text-xs">
                               <thead>
                                 <tr className="text-slate-500 text-left border-b border-slate-200">
-                                  <th className="py-1.5 pr-3">Realizacja</th>
+                                  <th className="py-1.5 pr-3">Nr zlecenia</th>
                                   <th className="py-1.5 pr-3">Kontrakt</th>
-                                  <th className="py-1.5 pr-3 text-right">Zleceń</th>
-                                  <th className="py-1.5 pr-3 text-right">Suma P</th>
+                                  <th className="py-1.5 pr-3">Realizacja</th>
+                                  <th className="py-1.5 pr-3 text-right">Fracht P</th>
                                   <th className="py-1.5 pr-3 text-right">G</th>
                                   <th className="py-1.5 pr-3 text-right">Próg 5%</th>
                                   <th className="py-1.5 text-right">ΔP</th>
                                 </tr>
                               </thead>
                               <tbody>
-                                {Array.from(c.byExecMonth.entries())
-                                  .sort(([a], [b]) => a.localeCompare(b))
-                                  .flatMap(([execM, buckets]) =>
-                                    Array.from(buckets.entries())
-                                      .sort(([a], [b]) => a.localeCompare(b))
-                                      .map(([contractM, b]) => (
-                                        <tr key={execM + contractM} className="border-b border-slate-100">
-                                          <td className="py-1 pr-3 text-slate-700">{fmtMonth(execM)}</td>
-                                          <td className="py-1 pr-3 text-slate-500">{fmtMonth(contractM)}</td>
-                                          <td className="py-1 pr-3 text-right text-slate-600">{b.count}</td>
-                                          <td className="py-1 pr-3 text-right text-slate-600">{fmtEur(b.sumP)}</td>
-                                          <td className="py-1 pr-3 text-right text-slate-600">
-                                            {b.g !== null ? `${b.g >= 0 ? "+" : ""}${b.g.toFixed(1)}%` : <span className="text-slate-300">brak</span>}
-                                          </td>
-                                          <td className="py-1 pr-3 text-right">
-                                            {b.g === null ? "—" : b.thresholdMet ? <span className="text-emerald-600">TAK</span> : <span className="text-slate-400">nie</span>}
-                                          </td>
-                                          <td className={`py-1 text-right font-medium ${b.deltaP > 0 ? "text-emerald-600" : b.deltaP < 0 ? "text-red-600" : "text-slate-400"}`}>
-                                            {b.deltaP !== 0 ? (b.deltaP >= 0 ? "+" : "") + fmtEur(b.deltaP) : "—"}
-                                          </td>
-                                        </tr>
-                                      ))
-                                  )}
+                                {c.orders.map((o) => (
+                                  <tr key={o.nr} className="border-b border-slate-100">
+                                    <td className="py-1 pr-3 text-slate-700 font-mono">{o.nr}</td>
+                                    <td className="py-1 pr-3 text-slate-500">{fmtDate(o.contractDate)}</td>
+                                    <td className="py-1 pr-3 text-slate-700">{fmtDate(o.execDate)}</td>
+                                    <td className="py-1 pr-3 text-right text-slate-600">{fmtEur(o.priceP)}</td>
+                                    <td className="py-1 pr-3 text-right text-slate-600">
+                                      {o.g !== null ? `${o.g >= 0 ? "+" : ""}${o.g.toFixed(2)}%` : <span className="text-slate-300">brak</span>}
+                                    </td>
+                                    <td className="py-1 pr-3 text-right">
+                                      {o.g === null ? "—" : o.thresholdMet ? <span className="text-emerald-600">TAK</span> : <span className="text-slate-400">nie</span>}
+                                    </td>
+                                    <td className={`py-1 text-right font-medium ${(o.deltaP ?? 0) > 0 ? "text-emerald-600" : (o.deltaP ?? 0) < 0 ? "text-red-600" : "text-slate-400"}`}>
+                                      {o.deltaP ? (o.deltaP >= 0 ? "+" : "") + fmtEur(o.deltaP) : "—"}
+                                    </td>
+                                  </tr>
+                                ))}
                               </tbody>
                             </table>
                           </td>

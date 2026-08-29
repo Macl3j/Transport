@@ -1,82 +1,104 @@
 // ─────────────────────────────────────────────────────────────
 // Korekta paliwowa (klauzula rewizji ceny transportu wg ON) — Hiszpania
 // Podstawa prawna: Ley 15/2009, de 11 de noviembre, del contrato de transporte
-// terrestre de mercancías, art. 38 + Orden FOM/1882/2012, de 1 de agosto, condición 3.
+// terrestre de mercancías, art. 38 + Orden FOM/1882/2012, de 1 de agosto,
+// condición 3, zaktualizowana Real Decreto-ley 9/2026 (14.04.2026) i
+// Real Decreto-ley 18/2026 (29.06.2026) w ramach Planu Integral de Respuesta
+// a la Crisis en Oriente Medio.
 //
-// Coeficiente G = wariancja średniej ceny ON między miesiącem zawarcia umowy
-// a miesiącem faktycznej realizacji transportu — publikowana oficjalnie przez
-// Ministerio de Transportes y Movilidad Sostenible:
-// https://www.transportes.gob.es/transporte-terrestre/servicios-al-transportista/indice-de-variacionmensual-de-los-precios-medios-del-gasoleo-en-espana
+// G = wariancja TYGODNIOWEJ ceny referencyjnej ON (Pmed, MMA >= 7 500 kg)
+// między dokładną datą zawarcia umowy a dokładną datą realizacji transportu
+// (nie przybliżenie miesiąc-do-miesiąca) — potwierdzone jako metoda prawnie
+// wiążąca w "Nota metodológica" Ministerio de Transportes y Movilidad
+// Sostenible (2026-07-02): "la variable G equivale al índice de variación
+// porcentual del precio medio SEMANAL del gasóleo".
+// Źródło danych: https://apps.fomento.gob.es/preciogasoleo/ — arkusz
+// tygodniowy PRECIOS DE REFERENCIA, kolumna ge75t.
 //
-// Tabela poniżej = "COEFICIENTE G APLICABLE A VEHÍCULOS CON MASA MÁXIMA
-// AUTORIZADA ≥ 7.500 KG" (dotyczy floty B&M — wszystkie ciągniki > 20 000 kg).
-// Stan na PDF zaktualizowany 10.08.2026, dane do lipca 2026 (kolejne miesiące
-// publikowane z ok. 10-dniowym opóźnieniem po zamknięciu miesiąca).
+// Reguła dopasowania daty do tygodnia: bierzemy najbliższą datę z serii
+// tygodniowej >= data docelowa (tak samo działa oficjalny kalkulator rządowy
+// — zweryfikowane na dwóch niezależnych parach dat w interfejsie kalkulatora).
 //
 // Wzór: ΔP = (G × P × coef) / 100, aktywny tylko gdy |G| >= 5%.
+//
+// Zmiana metodologii (sierpień 2026): zastępuje wcześniejszą tabelę
+// miesięczną (COEFICIENTE G APLICABLE...) i współczynnik 0,30 dla floty
+// >=20 000 kg — oba były nieaktualne. Zweryfikowane na realnych fakturach
+// korekty paliwowej Trans Sesé S.L. za czerwiec/lipiec 2026.
 // ─────────────────────────────────────────────────────────────
 
-// Miesiące kontraktowe (kolumny tabeli) — Lip.2024 .. Cze.2026
-const CONTRACT_MONTHS = [
-  "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12",
-  "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06",
-  "2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12",
-  "2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06",
+/** [data jako serial Excela (dni od 1899-12-30), cena €/L Pmed dla MMA>=7500kg] —
+ *  oficjalny tygodniowy biuletyn cenowy ON, pobrany 2026-08-25.
+ *  UWAGA: seria wymaga okresowego odświeżenia (ostatni znany tydzień patrz
+ *  PRICE_SERIES_LAST_DATE) — brak automatycznego, na żywo połączenia
+ *  z apps.fomento.gob.es z serwera aplikacji. */
+const PRICE_SERIES_RAW: [number, number][] = [
+  [43472,0.88475],[43479,0.90003],[43486,0.91488],[43493,0.92429],[43500,0.9303],[43507,0.93518],[43514,0.94303],[43521,0.95917],
+  [43528,0.96378],[43535,0.96659],[43542,0.96761],[43549,0.96627],[43556,0.96622],[43563,0.96959],[43570,0.97763],[43584,0.99015],
+  [43591,0.99074],[43598,0.99062],[43605,0.99159],[43612,0.9931],[43619,0.98167],[43626,0.95854],[43633,0.94207],[43640,0.93797],
+  [43647,0.94395],[43654,0.94704],[43661,0.95145],[43668,0.95393],[43675,0.9527],[43682,0.95655],[43689,0.94948],[43696,0.94297],
+  [43703,0.94129],[43710,0.94076],[43717,0.94288],[43724,0.95031],[43731,0.96439],[43738,0.96726],[43745,0.96009],[43752,0.95364],
+  [43759,0.95244],[43766,0.95256],[43773,0.95468],[43780,0.9558],[43787,0.95476],[43794,0.95474],[43801,0.95858],[43808,0.95801],
+  [43815,0.9601],[43836,0.98164],[43843,0.98732],[43850,0.98123],[43857,0.97246],[43864,0.96042],[43871,0.94789],[43878,0.94303],
+  [43885,0.94402],[43892,0.93452],[43899,0.91883],[43906,0.88307],[43913,0.8476],[43920,0.82489],[43927,0.80871],[43941,0.7958],
+  [43948,0.77728],[43955,0.76209],[43962,0.7615],[43969,0.76505],[43976,0.77576],[43983,0.779],[43990,0.78402],[43997,0.79329],
+  [44004,0.80059],[44011,0.81079],[44018,0.81527],[44025,0.82414],[44032,0.82745],[44039,0.82955],[44046,0.82783],[44053,0.8269],
+  [44060,0.82804],[44067,0.82807],[44074,0.82656],[44081,0.82273],[44088,0.8106],[44095,0.80542],[44102,0.80262],[44109,0.80135],
+  [44116,0.80213],[44123,0.80217],[44130,0.79859],[44137,0.79194],[44144,0.78924],[44151,0.79798],[44158,0.80378],[44165,0.81316],
+  [44172,0.81755],[44179,0.82526],[44186,0.83448],[44207,0.84797],[44214,0.85942],[44221,0.86555],[44228,0.86684],[44235,0.87604],
+  [44242,0.88792],[44249,0.90193],[44256,0.91393],[44263,0.92066],[44270,0.93228],[44277,0.93673],[44284,0.92972],[44298,0.9254],
+  [44305,0.92606],[44312,0.92908],[44319,0.93306],[44326,0.94257],[44333,0.94935],[44340,0.95155],[44347,0.95299],[44354,0.96033],
+  [44361,0.96892],[44368,0.97428],[44375,0.98121],[44382,0.98721],[44389,0.99445],[44396,0.99854],[44403,0.9954],[44410,1.00038],
+  [44417,1.00095],[44424,0.99741],[44431,0.99266],[44438,0.99147],[44445,0.99698],[44452,1.00121],[44459,1.00874],[44466,1.01792],
+  [44473,1.03321],[44480,1.05455],[44487,1.0732],[44494,1.08617],[44501,1.09311],[44508,1.09509],[44515,1.09616],[44522,1.09197],
+  [44529,1.08865],[44536,1.07065],[44543,1.06393],[44550,1.06204],[44564,1.06435],[44571,1.07484],[44578,1.09204],[44585,1.11118],
+  [44592,1.12635],[44599,1.14406],[44606,1.15984],[44613,1.17372],[44620,1.18802],[44627,1.25762],[44634,1.45295],[44641,1.43664],
+  [44648,1.46934],[44655,1.31218],[44662,1.28478],[44676,1.47779],[44683,1.49876],[44690,1.53074],[44697,1.51056],[44704,1.494],
+  [44711,1.48175],[44718,1.53522],[44725,1.60698],[44732,1.66714],[44739,1.68693],[44746,1.66711],[44753,1.62249],[44760,1.58043],
+  [44767,1.54857],[44774,1.51573],[44781,1.48345],[44788,1.44363],[44795,1.45195],[44802,1.50683],[44809,1.53878],[44816,1.52598],
+  [44823,1.49479],[44830,1.45679],[44837,1.4455],[44844,1.48538],[44851,1.56191],[44858,1.5815],[44865,1.58028],[44872,1.57412],
+  [44879,1.55422],[44886,1.50206],[44893,1.45643],[44900,1.40882],[44907,1.36503],[44914,1.32435],[44921,1.30914],[44928,1.32357],
+  [44935,1.34103],[44942,1.33867],[44949,1.3463],[44956,1.3593],[44963,1.3373],[44970,1.29707],[44977,1.28274],[44984,1.26431],
+  [44998,1.26725],[45005,1.24938],[45012,1.2286],[45019,1.21543],[45026,1.21027],[45033,1.20699],[45040,1.18774],[45047,1.16149],
+  [45054,1.13589],[45061,1.11793],[45068,1.11555],[45075,1.12112],[45082,1.12223],[45089,1.12799],[45096,1.13046],[45103,1.14223],
+  [45110,1.13907],[45117,1.14079],[45124,1.15222],[45131,1.162],[45138,1.19215],[45145,1.23419],[45152,1.2619],[45159,1.27489],
+  [45166,1.28345],[45173,1.29217],[45180,1.30154],[45187,1.32973],[45194,1.34431],[45201,1.34579],[45208,1.34172],[45215,1.32032],
+  [45222,1.318],[45229,1.31115],[45236,1.30704],[45243,1.27917],[45250,1.25437],[45257,1.23909],[45264,1.22627],[45271,1.21265],
+  [45278,1.19204],[45285,1.18485],[45292,1.18542],[45299,1.18077],[45306,1.17735],[45313,1.17978],[45320,1.18721],[45327,1.20137],
+  [45334,1.21372],[45341,1.23884],[45348,1.24135],[45355,1.23385],[45362,1.22578],[45369,1.21742],[45376,1.22381],[45383,1.22526],
+  [45390,1.2333],[45397,1.24069],[45404,1.23922],[45411,1.22515],[45418,1.21642],[45425,1.20086],[45432,1.18685],[45439,1.17783],
+  [45446,1.16986],[45453,1.15532],[45460,1.15225],[45467,1.16628],[45474,1.18092],[45481,1.1905],[45488,1.19069],[45495,1.18454],
+  [45502,1.17683],[45509,1.16886],[45516,1.15708],[45523,1.15205],[45530,1.13922],[45537,1.12806],[45544,1.113],[45551,1.09181],
+  [45558,1.0811],[45565,1.07695],[45572,1.07697],[45579,1.09463],[45586,1.10185],[45593,1.10212],[45600,1.10097],[45607,1.10742],
+  [45614,1.11313],[45621,1.12474],[45628,1.13371],[45635,1.13409],[45642,1.13478],[45649,1.13991],[45656,1.14331],[45663,1.15313],
+  [45670,1.16717],[45677,1.18984],[45684,1.19783],[45691,1.19186],[45698,1.18993],[45705,1.19121],[45712,1.18952],[45719,1.18265],
+  [45726,1.16833],[45733,1.15],[45740,1.14118],[45747,1.14077],[45754,1.14166],[45761,1.11972],[45768,1.10265],[45775,1.09456],
+  [45782,1.08968],[45789,1.0803],[45796,1.07903],[45803,1.07947],[45810,1.07661],[45817,1.07369],[45824,1.07864],[45831,1.10877],
+  [45838,1.12904],[45845,1.12293],[45852,1.12822],[45859,1.13475],[45866,1.13746],[45873,1.13453],[45880,1.12785],[45887,1.11987],
+  [45894,1.11447],[45901,1.11366],[45908,1.1155],[45915,1.11639],[45922,1.11788],[45929,1.11738],[45936,1.11852],[45943,1.11194],
+  [45950,1.10542],[45957,1.10362],[45964,1.11512],[45971,1.12892],[45978,1.14398],[45985,1.1545],[45992,1.15051],[45999,1.13885],
+  [46006,1.12594],[46013,1.10804],[46020,1.09791],[46027,1.09593],[46034,1.09449],[46041,1.09758],[46048,1.10431],[46055,1.11085],
+  [46062,1.11799],[46069,1.12205],[46076,1.12717],[46083,1.14201],[46090,1.31089],[46097,1.46901],[46104,1.56371],[46111,1.61551],
+  [46118,1.64825],[46125,1.7134],[46132,1.64335],[46139,1.57025],[46146,1.57717],[46153,1.56169],[46160,1.53204],[46167,1.53272],
+  [46174,1.49901],[46181,1.46846],[46188,1.44772],[46195,1.39862],[46202,1.36682],[46209,1.28633],[46216,1.2802],[46223,1.34085],
+  [46230,1.42336],[46237,1.48257],[46244,1.50543],
 ];
 
-// Miesiące realizacji (wiersze tabeli) — Sie.2024 .. Lip.2026
-const EXEC_MONTHS = [
-  "2024-08", "2024-09", "2024-10", "2024-11", "2024-12",
-  "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06",
-  "2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12",
-  "2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06", "2026-07",
-];
+const PRICE_SERIES = PRICE_SERIES_RAW.map(([date, price]) => ({ date, price })).sort((a, b) => a.date - b.date);
 
-// Wiersz i = wartości G% dla EXEC_MONTHS[i], kolumny = CONTRACT_MONTHS[0..i]
-const ROWS: number[][] = [
-  [-2.9],
-  [-7.4, -4.7],
-  [-7.3, -4.6, 0.1],
-  [-5.5, -2.7, 2.0, 1.9],
-  [-3.8, -0.9, 3.9, 3.8, 1.9],
-  [-0.4, 2.6, 7.6, 7.5, 5.5, 3.5],
-  [0.4, 3.4, 8.5, 8.3, 6.3, 4.3, 0.8],
-  [-2.6, 0.3, 5.3, 5.1, 3.1, 1.3, -2.2, -2.9],
-  [-5.8, -3.0, 1.8, 1.6, -0.3, -2.1, -5.4, -6.2, -3.3],
-  [-8.4, -5.7, -1.0, -1.2, -3.0, -4.8, -8.0, -8.7, -6.0, -2.7],
-  [-7.2, -4.4, 0.3, 0.1, -1.7, -3.5, -6.8, -7.5, -4.7, -1.5, 1.3],
-  [-4.3, -1.5, 3.4, 3.2, 1.3, -0.6, -4.0, -4.7, -1.8, 1.6, 4.4, 3.1],
-  [-5.2, -2.3, 2.5, 2.3, 0.4, -1.4, -4.8, -5.5, -2.7, 0.7, 3.5, 2.2, -0.9],
-  [-5.5, -2.7, 2.1, 1.9, 0.0, -1.8, -5.1, -5.9, -3.0, 0.3, 3.1, 1.8, -1.2, -0.4],
-  [-6.1, -3.3, 1.5, 1.3, -0.5, -2.4, -5.7, -6.4, -3.6, -0.3, 2.5, 1.2, -1.8, -1.0, -0.6],
-  [-3.5, -0.6, 4.3, 4.1, 2.2, 0.3, -3.1, -3.9, -0.9, 2.5, 5.3, 4.0, 0.9, 1.8, 2.1, 2.7],
-  [-5.5, -2.7, 2.1, 2.0, 0.1, -1.8, -5.1, -5.8, -3.0, 0.3, 3.2, 1.8, -1.2, -0.3, 0.0, 0.6, -2.1],
-  [-6.9, -4.1, 0.6, 0.5, -1.4, -3.2, -6.5, -7.2, -4.4, -1.1, 1.7, 0.3, -2.6, -1.8, -1.4, -0.9, -3.5, -1.5],
-  [-5.9, -3.1, 1.7, 1.5, -0.4, -2.2, -5.5, -6.3, -3.4, -0.1, 2.7, 1.4, -1.6, -0.8, -0.4, 0.2, -2.5, -0.5, 1.0],
-  [23.6, 27.5, 32.7, 34.3, 30.0, 28.9, 24.3, 18.7, 27.1, 30.3, 36.0, 32.6, 29.8, 30.9, 29.9, 32.3, 27.1, 31.3, 33.6, 25.7],
-  [43.6, 48.8, 58.6, 57.5, 54.7, 50.4, 44.3, 45.4, 48.2, 55.3, 59.8, 58.1, 51.5, 53.1, 54.7, 54.9, 50.8, 53.7, 56.5, 55.2, 12.1],
-  [30.0, 34.0, 40.9, 40.7, 38.0, 35.4, 30.5, 29.5, 33.6, 38.4, 42.5, 40.5, 36.2, 37.4, 37.9, 38.8, 34.9, 37.9, 40.0, 38.5, 4.6, -6.0],
-  [20.0, 23.7, 30.1, 29.9, 27.3, 24.9, 20.5, 19.5, 23.3, 27.7, 31.5, 29.7, 25.7, 26.8, 27.3, 28.1, 24.5, 27.2, 29.2, 27.9, -3.5, -13.2, -7.7],
-  [13.9, 17.5, 23.5, 23.3, 20.9, 18.6, 14.4, 13.5, 17.1, 21.3, 24.8, 23.1, 19.3, 20.4, 20.9, 21.6, 18.2, 20.8, 22.7, 21.4, -8.4, -17.6, -12.4, -5.1],
-];
+/** Ostatnia data (serial Excela), dla której mamy opublikowaną cenę tygodniową. */
+export const PRICE_SERIES_LAST_DATE = PRICE_SERIES[PRICE_SERIES.length - 1].date;
 
-const G_TABLE = new Map<string, Map<string, number>>();
-ROWS.forEach((vals, i) => {
-  const row = new Map<string, number>();
-  vals.forEach((g, j) => row.set(CONTRACT_MONTHS[j], g));
-  G_TABLE.set(EXEC_MONTHS[i], row);
-});
+export function excelSerialToIso(n: number): string {
+  return new Date(Math.round((n - 25569) * 86400 * 1000)).toISOString().slice(0, 10);
+}
 
-export const G_TABLE_LAST_EXEC_MONTH = EXEC_MONTHS[EXEC_MONTHS.length - 1]; // "2026-07"
-
-/** Zwraca G% (np. -5.1) dla pary (miesiąc realizacji, miesiąc zawarcia umowy), albo null gdy
- *  ministerstwo nie publikuje wartości dla tej kombinacji (ten sam miesiąc, albo miesiąc
- *  realizacji jeszcze nieopublikowany). */
-export function lookupG(execMonth: string, contractMonth: string): number | null {
-  const row = G_TABLE.get(execMonth);
-  if (!row) return null;
-  const v = row.get(contractMonth);
-  return v === undefined ? null : v;
+/** Najbliższa data z serii tygodniowej >= data docelowa (tak samo jak oficjalny
+ *  kalkulator rządowy dopasowuje datę do tygodnia). Zwraca null, jeśli data
+ *  wykracza poza ostatni opublikowany tydzień. */
+function priceOnOrAfter(dateSerial: number): number | null {
+  for (const p of PRICE_SERIES) if (p.date >= dateSerial) return p.price;
+  return null;
 }
 
 export const FUEL_REVISION_THRESHOLD_PCT = 5;
@@ -85,29 +107,48 @@ export const FUEL_REVISION_THRESHOLD_PCT = 5;
 export type VehicleWeightClass = "ge20000" | "35to20000" | "construction" | "le3500";
 
 export const FUEL_COEFFICIENTS: Record<VehicleWeightClass, number> = {
-  ge20000: 0.30,       // MMA >= 20 000 kg (poza budowlanymi) — standardowe ciągniki TIR B&M
-  "35to20000": 0.20,   // 3 500 kg < MMA < 20 000 kg (poza budowlanymi)
-  construction: 0.20,  // pojazdy budowlane MMA > 3 500 kg
-  le3500: 0.10,        // MMA <= 3 500 kg
+  // Podniesione z 0,30 na 0,40 przez Real Decreto-ley 9/2026 (14.04.2026),
+  // potwierdzone w oficjalnej tabeli "Coeficiente C" i zweryfikowane na
+  // realnych fakturach korekty paliwowej SESE za 06-07/2026. Stosujemy jako
+  // stałą wartość dla całego 2026 — kalkulator NIE przełącza automatycznie
+  // na 0,30 dla zleceń z kontraktem sprzed 14.04.2026 (tak samo jak w
+  // analizie SESE); jeśli to istotne dla starszych zleceń, wymaga ręcznej
+  // weryfikacji daty wejścia w życie.
+  ge20000: 0.40,
+  // Poniższe trzy wartości NIE zostały zweryfikowane pod kątem RDL 9/2026 —
+  // flota B&M to wyłącznie pojazdy >= 20 000 kg, więc nie miały praktycznego
+  // znaczenia w dotychczasowej analizie. Do potwierdzenia, jeśli kiedykolwiek
+  // dotyczy.
+  "35to20000": 0.20,
+  construction: 0.20,
+  le3500: 0.10,
 };
 
 export interface FuelCorrectionResult {
-  g: number | null;          // % wariancji ON, null = brak danych publikowanych
+  g: number | null;          // % wariancji ON, null = brak opublikowanej ceny dla jednej z dat
   thresholdMet: boolean;     // |g| >= 5%
   deltaP: number | null;     // EUR — kwota korekty (dodatnia = dopłata, ujemna = zwrot)
+  p0: number | null;         // cena referencyjna €/L w tygodniu zawarcia umowy
+  p1: number | null;         // cena referencyjna €/L w tygodniu realizacji transportu
 }
 
-/** Liczy korektę paliwową dla jednego zlecenia/koszyka zleceń. */
+/** Liczy korektę paliwową dla jednego zlecenia na podstawie dokładnych dat.
+ *  @param contractDate data zawarcia umowy — serial Excela (dni od 1899-12-30)
+ *  @param execDate      data realizacji/dostawy — serial Excela
+ *  @param priceP        baza (fracht) EUR do przemnożenia przez G × coef
+ */
 export function calcFuelCorrection(
-  execMonth: string,
-  contractMonth: string,
+  contractDate: number,
+  execDate: number,
   priceP: number,
   weightClass: VehicleWeightClass = "ge20000"
 ): FuelCorrectionResult {
-  const g = lookupG(execMonth, contractMonth);
-  if (g === null) return { g: null, thresholdMet: false, deltaP: null };
+  const p0 = priceOnOrAfter(contractDate);
+  const p1 = priceOnOrAfter(execDate);
+  if (p0 == null || p1 == null) return { g: null, thresholdMet: false, deltaP: null, p0, p1 };
+  const g = ((p1 - p0) / p0) * 100;
   const thresholdMet = Math.abs(g) >= FUEL_REVISION_THRESHOLD_PCT;
   const coef = FUEL_COEFFICIENTS[weightClass];
   const deltaP = thresholdMet ? (g * priceP * coef) / 100 : 0;
-  return { g, thresholdMet, deltaP };
+  return { g, thresholdMet, deltaP, p0, p1 };
 }
