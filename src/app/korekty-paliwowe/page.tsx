@@ -1,11 +1,14 @@
 "use client";
 
-import { Fragment, useState, useRef, useCallback, useMemo } from "react";
+import { Fragment, useState, useRef, useCallback, useMemo, useEffect } from "react";
 import * as XLSX from "xlsx";
+import { supabase } from "@/lib/supabase";
 import {
   calcFuelCorrection,
   excelSerialToIso,
-  PRICE_SERIES_LAST_DATE,
+  getPriceSeriesLastDate,
+  loadPriceSeries,
+  parseWeeklyPriceRows,
   type VehicleWeightClass,
 } from "@/lib/fuelCorrection";
 
@@ -103,6 +106,71 @@ export default function KorektyPaliwowePage() {
   const [expandedClient, setExpandedClient] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // ── Aktualizacja tygodniowej serii cenowej ON ─────────────────
+  const [priceSeriesVersion, setPriceSeriesVersion] = useState(0);
+  const [priceUpdating, setPriceUpdating] = useState(false);
+  const [priceUpdateMsg, setPriceUpdateMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const priceFileRef = useRef<HTMLInputElement>(null);
+
+  // Przy starcie wczytaj ewentualne nowsze tygodnie zapisane wcześniej w Supabase
+  // (nadpisują/rozszerzają wbudowaną serię domyślną).
+  useEffect(() => {
+    supabase
+      .from("fuel_price_series")
+      .select("date_serial, price_ge75t")
+      .then(({ data }) => {
+        if (data && data.length > 0) {
+          loadPriceSeries(data.map((d) => ({ date: d.date_serial, price: Number(d.price_ge75t) })));
+          setPriceSeriesVersion((v) => v + 1);
+        }
+      });
+  }, []);
+
+  const handlePriceFile = useCallback((file: File) => {
+    setPriceUpdating(true);
+    setPriceUpdateMsg(null);
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        if (!(ev.target?.result instanceof ArrayBuffer)) throw new Error("Nie udało się odczytać pliku.");
+        const wb = XLSX.read(new Uint8Array(ev.target.result), { type: "array" });
+
+        // Szukamy arkusza "PRECIOS DE REFERENCIA" — jeśli nazwa się zmieni, spróbuj
+        // znaleźć arkusz z nagłówkiem zawierającym "FECHA" w pierwszych 5 wierszach.
+        let sheetName = wb.SheetNames.find((n) => n.toUpperCase().includes("PRECIOS DE REFERENCIA"));
+        if (!sheetName) {
+          sheetName = wb.SheetNames.find((n) => {
+            const rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[n], { header: 1, defval: null }).slice(0, 5);
+            return rows.some((r) => r.some((c) => String(c ?? "").toUpperCase() === "FECHA"));
+          });
+        }
+        if (!sheetName) throw new Error('Nie znaleziono arkusza "PRECIOS DE REFERENCIA" w pliku.');
+
+        const rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[sheetName], { header: 1, defval: null });
+        const headerRow = rows.findIndex((r) => r.some((c) => String(c ?? "").toUpperCase() === "FECHA"));
+        const dataRows = rows.slice(headerRow + 1);
+        const points = parseWeeklyPriceRows(dataRows);
+        if (points.length === 0) throw new Error("Arkusz nie zawiera żadnych opublikowanych wierszy cenowych.");
+
+        const { error: upsertError } = await supabase
+          .from("fuel_price_series")
+          .upsert(
+            points.map((p) => ({ date_serial: p.date, price_ge75t: p.price })),
+            { onConflict: "date_serial" }
+          );
+        if (upsertError) throw new Error(upsertError.message);
+
+        loadPriceSeries(points);
+        setPriceSeriesVersion((v) => v + 1);
+        setPriceUpdateMsg({ ok: true, text: `✓ Zaimportowano ${points.length} tygodni. Najnowsza cena: ${fmtDate(getPriceSeriesLastDate())}.` });
+      } catch (err) {
+        setPriceUpdateMsg({ ok: false, text: err instanceof Error ? err.message : String(err) });
+      }
+      setPriceUpdating(false);
+    };
+    reader.readAsArrayBuffer(file);
+  }, []);
+
   const handleFiles = useCallback((files: FileList) => {
     setLoading(true);
     setError(null);
@@ -188,7 +256,7 @@ export default function KorektyPaliwowePage() {
     };
 
     return { clients, grand };
-  }, [orders, weightClass]);
+  }, [orders, weightClass, priceSeriesVersion]);
 
   // ── Render ─────────────────────────────────────────────────
 
@@ -199,9 +267,52 @@ export default function KorektyPaliwowePage() {
         <p className="text-sm text-slate-500 mt-0.5">
           Wg oficjalnego wskaźnika G liczonego z TYGODNIOWEJ ceny referencyjnej ON (Ministerio de Transportes,
           Hiszpania) — Ley 15/2009 art. 38 + Orden FOM/1882/2012 cond. 3, zaktualizowana RDL 9/2026 i 18/2026.
-          Ostatnia opublikowana cena tygodniowa: <strong>{fmtDate(PRICE_SERIES_LAST_DATE)}</strong> — zlecenia
+          Ostatnia opublikowana cena tygodniowa: <strong>{fmtDate(getPriceSeriesLastDate())}</strong> — zlecenia
           z późniejszą datą realizacji lub kontraktu pokażą brak danych, dopóki seria nie zostanie odświeżona.
         </p>
+      </div>
+
+      {/* Aktualizacja serii cenowej */}
+      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-2.5">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <div className="text-sm font-semibold text-amber-800">🔄 Aktualizacja tygodniowej ceny ON</div>
+            <p className="text-xs text-amber-700 mt-0.5 max-w-2xl">
+              Rządowa strona blokuje automatyczne pobieranie z serwera aplikacji — pobierz najnowszy plik ręcznie
+              ze strony Ministerstwa, a potem wgraj go tutaj. Dane zapisują się w bazie i są widoczne dla
+              wszystkich, bez zmiany kodu.
+            </p>
+          </div>
+          <a
+            href="https://www.transportes.gob.es/transporte-terrestre/servicios-al-transportista/indice-de-variacion-semanal-de-los-precios-medios-del-gasoleo-en-espana"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs font-medium text-blue-700 bg-white border border-blue-200 rounded-lg px-3 py-1.5 hover:bg-blue-50 whitespace-nowrap"
+          >
+            📎 Otwórz stronę Ministerstwa
+          </a>
+        </div>
+        <div className="flex items-center gap-3 flex-wrap">
+          <button
+            onClick={() => priceFileRef.current?.click()}
+            disabled={priceUpdating}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium border border-dashed border-amber-400 text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+          >
+            📂 {priceUpdating ? "Wczytywanie…" : "Wgraj pobrany plik XLSX"}
+          </button>
+          <input
+            ref={priceFileRef}
+            type="file"
+            accept=".xls,.xlsx"
+            className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handlePriceFile(f); e.target.value = ""; }}
+          />
+        </div>
+        {priceUpdateMsg && (
+          <div className={`text-xs rounded-lg px-3 py-2 border ${priceUpdateMsg.ok ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-red-50 text-red-700 border-red-200"}`}>
+            {priceUpdateMsg.text}
+          </div>
+        )}
       </div>
 
       {/* Upload */}
@@ -231,9 +342,9 @@ export default function KorektyPaliwowePage() {
               className="border border-slate-200 rounded px-2 py-1 text-xs text-slate-700"
             >
               <option value="ge20000">≥ 20 000 kg — coef. 0,40 (standardowe TIR-y, od RDL 9/2026)</option>
-              <option value="35to20000">3 500–20 000 kg — coef. 0,20 (niezweryfikowane po RDL 9/2026)</option>
-              <option value="construction">Budowlane &gt; 3 500 kg — coef. 0,20 (niezweryfikowane po RDL 9/2026)</option>
-              <option value="le3500">≤ 3 500 kg — coef. 0,10 (niezweryfikowane po RDL 9/2026)</option>
+              <option value="35to20000">3 500–20 000 kg — coef. 0,30 (od RDL 9/2026)</option>
+              <option value="construction">Budowlane &gt; 3 500 kg — coef. 0,30 (od RDL 9/2026)</option>
+              <option value="le3500">≤ 3 500 kg — coef. 0,20 (od RDL 9/2026)</option>
             </select>
           </label>
 

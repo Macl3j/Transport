@@ -28,10 +28,11 @@
 // ─────────────────────────────────────────────────────────────
 
 /** [data jako serial Excela (dni od 1899-12-30), cena €/L Pmed dla MMA>=7500kg] —
- *  oficjalny tygodniowy biuletyn cenowy ON, pobrany 2026-08-25.
- *  UWAGA: seria wymaga okresowego odświeżenia (ostatni znany tydzień patrz
- *  PRICE_SERIES_LAST_DATE) — brak automatycznego, na żywo połączenia
- *  z apps.fomento.gob.es z serwera aplikacji. */
+ *  oficjalny tygodniowy biuletyn cenowy ON, pobrany 2026-08-25. To jest
+ *  DOMYŚLNA/wbudowana seria (fallback) — strona /korekty-paliwowe pozwala
+ *  wgrać świeższy oficjalny plik XLSX, co dokłada nowsze tygodnie przez
+ *  loadPriceSeries() i zapisuje je w tabeli Supabase `fuel_price_series`,
+ *  żeby przetrwały między sesjami bez zmiany tego pliku. */
 const PRICE_SERIES_RAW: [number, number][] = [
   [43472,0.88475],[43479,0.90003],[43486,0.91488],[43493,0.92429],[43500,0.9303],[43507,0.93518],[43514,0.94303],[43521,0.95917],
   [43528,0.96378],[43535,0.96659],[43542,0.96761],[43549,0.96627],[43556,0.96622],[43563,0.96959],[43570,0.97763],[43584,0.99015],
@@ -84,20 +85,58 @@ const PRICE_SERIES_RAW: [number, number][] = [
   [46230,1.42336],[46237,1.48257],[46244,1.50543],
 ];
 
-const PRICE_SERIES = PRICE_SERIES_RAW.map(([date, price]) => ({ date, price })).sort((a, b) => a.date - b.date);
+const DEFAULT_PRICE_SERIES = PRICE_SERIES_RAW.map(([date, price]) => ({ date, price })).sort((a, b) => a.date - b.date);
 
-/** Ostatnia data (serial Excela), dla której mamy opublikowaną cenę tygodniową. */
-export const PRICE_SERIES_LAST_DATE = PRICE_SERIES[PRICE_SERIES.length - 1].date;
+/** Aktywna seria cenowa — startuje jako wbudowany domyślny zestaw, może zostać
+ *  rozszerzona/nadpisana w trakcie działania aplikacji przez loadPriceSeries()
+ *  (np. po wgraniu świeższego pliku Ministerstwa na stronie /korekty-paliwowe
+ *  lub po wczytaniu wierszy z tabeli Supabase `fuel_price_series`). */
+let ACTIVE_PRICE_SERIES = DEFAULT_PRICE_SERIES;
+
+/** Dokłada/nadpisuje punkty ceny w aktywnej serii (nowsze dane wygrywają przy
+ *  tej samej dacie) i zwraca liczbę unikalnych tygodni w wynikowej serii. */
+export function loadPriceSeries(points: { date: number; price: number }[]): number {
+  const map = new Map<number, number>();
+  for (const p of DEFAULT_PRICE_SERIES) map.set(p.date, p.price);
+  for (const p of ACTIVE_PRICE_SERIES) map.set(p.date, p.price);
+  for (const p of points) if (typeof p.price === "number" && !isNaN(p.price)) map.set(p.date, p.price);
+  ACTIVE_PRICE_SERIES = Array.from(map, ([date, price]) => ({ date, price })).sort((a, b) => a.date - b.date);
+  return ACTIVE_PRICE_SERIES.length;
+}
+
+/** Ostatnia data (serial Excela), dla której aktywna seria ma opublikowaną cenę. */
+export function getPriceSeriesLastDate(): number {
+  return ACTIVE_PRICE_SERIES[ACTIVE_PRICE_SERIES.length - 1].date;
+}
+
+/** Filtruje/normalizuje surowe wiersze [FECHA, Pmed MMA>=7,5t, ...] wyciągnięte
+ *  z arkusza "PRECIOS DE REFERENCIA" oficjalnego pliku Ministerstwa — odrzuca
+ *  puste/jeszcze nieopublikowane przyszłe tygodnie (komórka z ceną to wtedy
+ *  pusty string, nie liczba). */
+export function parseWeeklyPriceRows(rows: unknown[][]): { date: number; price: number }[] {
+  const out: { date: number; price: number }[] = [];
+  for (const r of rows) {
+    const date = r[0], price = r[1];
+    if (typeof date === "number" && typeof price === "number" && !isNaN(price)) out.push({ date, price });
+  }
+  return out;
+}
 
 export function excelSerialToIso(n: number): string {
   return new Date(Math.round((n - 25569) * 86400 * 1000)).toISOString().slice(0, 10);
+}
+
+/** Konwersja daty ISO (YYYY-MM-DD) na serial Excela — odwrotność excelSerialToIso. */
+export function isoToExcelSerial(iso: string): number {
+  const [y, m, d] = iso.split("-").map(Number);
+  return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000);
 }
 
 /** Najbliższa data z serii tygodniowej >= data docelowa (tak samo jak oficjalny
  *  kalkulator rządowy dopasowuje datę do tygodnia). Zwraca null, jeśli data
  *  wykracza poza ostatni opublikowany tydzień. */
 function priceOnOrAfter(dateSerial: number): number | null {
-  for (const p of PRICE_SERIES) if (p.date >= dateSerial) return p.price;
+  for (const p of ACTIVE_PRICE_SERIES) if (p.date >= dateSerial) return p.price;
   return null;
 }
 
@@ -106,22 +145,18 @@ export const FUEL_REVISION_THRESHOLD_PCT = 5;
 // Współczynniki wg wzorów a)-d) — Orden FOM/1882/2012, warianty wagowe pojazdu
 export type VehicleWeightClass = "ge20000" | "35to20000" | "construction" | "le3500";
 
+// Wartości potwierdzone wprost z arkusza `COEFIC "C" VARIACIÓN PRECIOS`
+// oficjalnego pliku Ministerstwa (preciogasoleosemanalweb_*.xlsx) — kolumny
+// A)/B)/C)/D) tej tabeli odpowiadają dokładnie czterem klasom wagowym z
+// Orden FOM/1882/2012, po aktualizacji Real Decreto-ley 9/2026 (16.04.2026,
+// obowiązuje nadal po RDL 18/2026 z 01.07.2026 — zmienił się tylko wybór
+// ceny referencyjnej dla pojazdów < 7,5 t, nie same wartości współczynnika
+// dla klasy A, którą stosuje cała flota B&M).
 export const FUEL_COEFFICIENTS: Record<VehicleWeightClass, number> = {
-  // Podniesione z 0,30 na 0,40 przez Real Decreto-ley 9/2026 (14.04.2026),
-  // potwierdzone w oficjalnej tabeli "Coeficiente C" i zweryfikowane na
-  // realnych fakturach korekty paliwowej SESE za 06-07/2026. Stosujemy jako
-  // stałą wartość dla całego 2026 — kalkulator NIE przełącza automatycznie
-  // na 0,30 dla zleceń z kontraktem sprzed 14.04.2026 (tak samo jak w
-  // analizie SESE); jeśli to istotne dla starszych zleceń, wymaga ręcznej
-  // weryfikacji daty wejścia w życie.
-  ge20000: 0.40,
-  // Poniższe trzy wartości NIE zostały zweryfikowane pod kątem RDL 9/2026 —
-  // flota B&M to wyłącznie pojazdy >= 20 000 kg, więc nie miały praktycznego
-  // znaczenia w dotychczasowej analizie. Do potwierdzenia, jeśli kiedykolwiek
-  // dotyczy.
-  "35to20000": 0.20,
-  construction: 0.20,
-  le3500: 0.10,
+  ge20000: 0.40,       // A) MMA >= 20 000 kg, poza budowlanymi
+  "35to20000": 0.30,   // B) 3 500 kg < MMA < 20 000 kg, poza budowlanymi
+  construction: 0.30,  // C) pojazdy budowlane MMA > 3 500 kg
+  le3500: 0.20,        // D) MMA <= 3 500 kg
 };
 
 export interface FuelCorrectionResult {
