@@ -202,7 +202,7 @@ export default function DyspozytorzyPage() {
   const [configTypeFilter, setConfigTypeFilter] = useState<"all" | "ciągnik" | "naczepa">("all");
   const [routeSearch, setRouteSearch] = useState("");
   const [clientSearch, setClientSearch] = useState("");
-  const [clientSortKey, setClientSortKey] = useState<"name" | "routes" | "km" | "fracht" | "cost" | "margin" | "marginPct">("marginPct");
+  const [clientSortKey, setClientSortKey] = useState<"name" | "routes" | "km" | "ratePerKm" | "fracht" | "cost" | "margin" | "marginPct">("marginPct");
   const [clientSortDesc, setClientSortDesc] = useState(false);
 
   // Loss analysis modal
@@ -722,9 +722,14 @@ export default function DyspozytorzyPage() {
       const margin = fracht - cost;
       const marginPct = fracht > 0 ? (margin / fracht) * 100 : 0;
       const km = routes.reduce((s, r) => s + r.totalKm, 0);
+      // Stawka €/km liczona wyłącznie z km ŁADOWNYCH (distanceKm), tak jak
+      // przewoźnicy deklarują swoje stawki (np. SESE: 1,35 €/km) — km puste
+      // (repozycjonowanie) się do tego nie wliczają.
+      const kmLoaded = routes.reduce((s, r) => s + r.distanceKm, 0);
+      const ratePerKm = kmLoaded > 0 ? fracht / kmLoaded : 0;
       const rated = routes.filter(r => !r.noFreightData);
       return {
-        name, routes: routes.length, km, fracht, cost, margin, marginPct,
+        name, routes: routes.length, km, kmLoaded, fracht, cost, margin, marginPct, ratePerKm,
         losses: rated.filter(r => r.marginPct < 0).length,
         lowMargin: rated.filter(r => r.marginPct >= 0 && r.marginPct < 5).length,
         breakeven: rated.filter(r => r.marginPct >= 5 && r.marginPct < 15).length,
@@ -1212,6 +1217,7 @@ export default function DyspozytorzyPage() {
                         ["name", "Zleceniodawca", "text-left"],
                         ["routes", "Zleceń", "text-right"],
                         ["km", "Km", "text-right"],
+                        ["ratePerKm", "Stawka €/km", "text-right"],
                         ["fracht", "Fracht", "text-right"],
                         ["cost", "Koszty HBM", "text-right"],
                         ["margin", "Marża EUR", "text-right"],
@@ -1227,13 +1233,16 @@ export default function DyspozytorzyPage() {
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {clientRows.length === 0 ? (
-                      <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400 text-sm">Brak klientów spełniających kryteria</td></tr>
+                      <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400 text-sm">Brak klientów spełniających kryteria</td></tr>
                     ) : clientRows.map((c, i) => (
                       <tr key={c.name} className={`hover:bg-slate-50 ${c.margin < 0 ? "bg-red-50/40" : ""}`}>
                         <td className="px-4 py-3 text-center text-slate-400 text-xs font-mono">{i + 1}</td>
                         <td className="px-4 py-3 text-slate-800 font-medium max-w-[220px] truncate" title={c.name}>{c.name}</td>
                         <td className="px-4 py-3 text-right text-slate-600">{c.routes}</td>
                         <td className="px-4 py-3 text-right text-slate-600">{Math.round(c.km).toLocaleString("pl-PL")}</td>
+                        <td className="px-4 py-3 text-right text-slate-700 font-medium" title="Fracht / km ładowne (bez pustych)">
+                          {c.kmLoaded > 0 ? c.ratePerKm.toFixed(3) + " €" : "—"}
+                        </td>
                         <td className="px-4 py-3 text-right text-slate-700">{fmtEur(c.fracht)}</td>
                         <td className="px-4 py-3 text-right text-slate-500">{fmtEur(c.cost)}</td>
                         <td className={`px-4 py-3 text-right font-semibold ${marginColor(c.marginPct)}`}>{fmtEur(c.margin)}</td>
