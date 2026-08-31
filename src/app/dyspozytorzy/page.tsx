@@ -186,7 +186,7 @@ export default function DyspozytorzyPage() {
   const [monthlyData, setMonthlyData] = useState<MonthlyVehicleSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [analysisLoading, setAnalysisLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"config" | "dashboard" | "routes" | "monthly" | "idle">("dashboard");
+  const [activeTab, setActiveTab] = useState<"config" | "dashboard" | "routes" | "clients" | "monthly" | "idle">("dashboard");
   const [selectedDispatcher, setSelectedDispatcher] = useState<string | null>(null);
   const [weekLabel, setWeekLabel] = useState("");
   const [eurRate, setEurRate] = useState(4.27);
@@ -201,6 +201,9 @@ export default function DyspozytorzyPage() {
   const [vehicleTypeFilter, setVehicleTypeFilter] = useState<"all" | "ciągnik" | "naczepa">("all");
   const [configTypeFilter, setConfigTypeFilter] = useState<"all" | "ciągnik" | "naczepa">("all");
   const [routeSearch, setRouteSearch] = useState("");
+  const [clientSearch, setClientSearch] = useState("");
+  const [clientSortKey, setClientSortKey] = useState<"name" | "routes" | "km" | "fracht" | "cost" | "margin" | "marginPct">("marginPct");
+  const [clientSortDesc, setClientSortDesc] = useState(false);
 
   // Loss analysis modal
   const [analysisRoute, setAnalysisRoute] = useState<RouteMetric | null>(null);
@@ -701,6 +704,50 @@ export default function DyspozytorzyPage() {
   const selectedKpi = kpiData.find(d => d.id === selectedDispatcher);
   const allRoutes = kpiData.flatMap(d => d.routeList);
 
+  // Rentowność klientów — te same trasy/koszty co w Trasach i Dashboardzie,
+  // przegrupowane po Zleceniodawcy zamiast po dyspozytorze.
+  const clientRows = (() => {
+    const byVehicleType = vehicleTypeFilter === "all" ? allRoutes : allRoutes.filter(r => {
+      const vType = vehicles.find(v => v.reg === r.vehicle)?.vehicle_type;
+      return vType === vehicleTypeFilter;
+    });
+    const map = new Map<string, RouteMetric[]>();
+    for (const r of byVehicleType) {
+      if (!map.has(r.client)) map.set(r.client, []);
+      map.get(r.client)!.push(r);
+    }
+    const rows = Array.from(map.entries()).map(([name, routes]) => {
+      const fracht = routes.reduce((s, r) => s + r.frachtEur, 0);
+      const cost = routes.reduce((s, r) => s + r.totalCost, 0);
+      const margin = fracht - cost;
+      const marginPct = fracht > 0 ? (margin / fracht) * 100 : 0;
+      const km = routes.reduce((s, r) => s + r.totalKm, 0);
+      const rated = routes.filter(r => !r.noFreightData);
+      return {
+        name, routes: routes.length, km, fracht, cost, margin, marginPct,
+        losses: rated.filter(r => r.marginPct < 0).length,
+        lowMargin: rated.filter(r => r.marginPct >= 0 && r.marginPct < 5).length,
+        breakeven: rated.filter(r => r.marginPct >= 5 && r.marginPct < 15).length,
+        profitable: rated.filter(r => r.marginPct >= 15).length,
+        noData: routes.length - rated.length,
+      };
+    });
+    const q = clientSearch.trim().toLowerCase();
+    const filtered = q ? rows.filter(r => r.name.toLowerCase().includes(q)) : rows;
+    filtered.sort((a, b) => {
+      const av = a[clientSortKey], bv = b[clientSortKey];
+      const cmp = typeof av === "string" ? av.localeCompare(bv as string, "pl") : (av as number) - (bv as number);
+      return clientSortDesc ? -cmp : cmp;
+    });
+    return filtered;
+  })();
+  function toggleClientSort(key: typeof clientSortKey) {
+    if (clientSortKey === key) setClientSortDesc(d => !d);
+    else { setClientSortKey(key); setClientSortDesc(key === "name" ? false : true); }
+  }
+  const ClientSortIcon = ({ k }: { k: typeof clientSortKey }) =>
+    clientSortKey === k ? <span className="ml-1 text-blue-500">{clientSortDesc ? "↓" : "↑"}</span> : <span className="ml-1 text-slate-300">↕</span>;
+
   if (loading) return (
     <div className="flex items-center gap-2 text-blue-600 text-sm p-8">
       <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
@@ -748,7 +795,7 @@ export default function DyspozytorzyPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-slate-200">
-        {([["dashboard","📊 Dashboard"], ["routes","📋 Trasy"], ["idle","⏸ Przestoje"], ["monthly","📅 Bilans miesięczny"], ["config","⚙ Konfiguracja"]] as [string,string][]).map(([t,l]) => (
+        {([["dashboard","📊 Dashboard"], ["routes","📋 Trasy"], ["clients","🧑‍💼 Klienci"], ["idle","⏸ Przestoje"], ["monthly","📅 Bilans miesięczny"], ["config","⚙ Konfiguracja"]] as [string,string][]).map(([t,l]) => (
           <button key={t} onClick={()=>setActiveTab(t as any)}
             className={`px-4 py-2.5 text-sm font-medium rounded-t-lg border-b-2 transition-colors ${
               activeTab===t ? "border-blue-600 text-blue-600 bg-blue-50" : "border-transparent text-slate-500 hover:text-slate-800"}`}>
@@ -1097,6 +1144,116 @@ export default function DyspozytorzyPage() {
             </table>
           )}
         </div>
+        </div>
+      )}
+
+      {/* ── Rentowność klientów ── */}
+      {activeTab === "clients" && (
+        <div className="space-y-3">
+          <div className="flex gap-2 flex-wrap items-center">
+            <input value={clientSearch} onChange={e => setClientSearch(e.target.value)}
+              placeholder="Szukaj klienta…"
+              className="px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none w-64" />
+            {(["all", "ciągnik", "naczepa"] as const).map(t => (
+              <button key={t} onClick={() => setVehicleTypeFilter(t)}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                  vehicleTypeFilter === t ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
+                {t === "all" ? "Wszystkie" : t === "ciągnik" ? "🚛 Ciągniki" : "🚌 Naczepy"}
+              </button>
+            ))}
+            {clientRows.length > 0 && (
+              <span className="text-xs text-slate-400 ml-auto">{clientRows.length} klientów</span>
+            )}
+          </div>
+
+          {allRoutes.length === 0 ? (
+            <div className="card py-16 text-center text-slate-400">
+              <p className="text-lg mb-2">Brak danych</p>
+              <p className="text-sm">Wczytaj plik TMS żeby zobaczyć rentowność klientów</p>
+            </div>
+          ) : (
+            <>
+              {/* Podsumowanie */}
+              {(() => {
+                const totalFracht = clientRows.reduce((s, c) => s + c.fracht, 0);
+                const totalCost = clientRows.reduce((s, c) => s + c.cost, 0);
+                const totalMargin = totalFracht - totalCost;
+                const lossClients = clientRows.filter(c => c.margin < 0).length;
+                return (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="card py-3">
+                      <p className="text-xs text-slate-500 uppercase tracking-wide">Klientów</p>
+                      <p className="text-lg font-bold mt-0.5 text-slate-800">{clientRows.length}</p>
+                    </div>
+                    <div className="card py-3">
+                      <p className="text-xs text-slate-500 uppercase tracking-wide">Łączny fracht</p>
+                      <p className="text-lg font-bold mt-0.5 text-slate-800">{fmtEur(totalFracht)}</p>
+                    </div>
+                    <div className="card py-3">
+                      <p className="text-xs text-slate-500 uppercase tracking-wide">Marża razem</p>
+                      <p className={`text-lg font-bold mt-0.5 ${totalMargin >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+                        {fmtEur(totalMargin)} <span className="text-sm font-normal">({fmtPct(totalFracht > 0 ? totalMargin / totalFracht * 100 : 0)})</span>
+                      </p>
+                    </div>
+                    <div className={`card py-3 ${lossClients > 0 ? "border-l-4 border-red-400" : ""}`}>
+                      <p className="text-xs text-slate-500 uppercase tracking-wide">Klienci na stracie</p>
+                      <p className={`text-lg font-bold mt-0.5 ${lossClients > 0 ? "text-red-600" : "text-emerald-600"}`}>{lossClients}</p>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="card overflow-x-auto p-0">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 border-b border-slate-200">
+                    <tr>
+                      <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500 uppercase w-12">LP</th>
+                      {([
+                        ["name", "Zleceniodawca", "text-left"],
+                        ["routes", "Zleceń", "text-right"],
+                        ["km", "Km", "text-right"],
+                        ["fracht", "Fracht", "text-right"],
+                        ["cost", "Koszty HBM", "text-right"],
+                        ["margin", "Marża EUR", "text-right"],
+                        ["marginPct", "Marża %", "text-right"],
+                      ] as [typeof clientSortKey, string, string][]).map(([key, label, align]) => (
+                        <th key={key} onClick={() => toggleClientSort(key)}
+                          className={`${align} px-4 py-3 text-xs font-semibold text-slate-500 uppercase cursor-pointer hover:text-slate-800 select-none`}>
+                          {label}<ClientSortIcon k={key} />
+                        </th>
+                      ))}
+                      <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Rozkład tras</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {clientRows.length === 0 ? (
+                      <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400 text-sm">Brak klientów spełniających kryteria</td></tr>
+                    ) : clientRows.map((c, i) => (
+                      <tr key={c.name} className={`hover:bg-slate-50 ${c.margin < 0 ? "bg-red-50/40" : ""}`}>
+                        <td className="px-4 py-3 text-center text-slate-400 text-xs font-mono">{i + 1}</td>
+                        <td className="px-4 py-3 text-slate-800 font-medium max-w-[220px] truncate" title={c.name}>{c.name}</td>
+                        <td className="px-4 py-3 text-right text-slate-600">{c.routes}</td>
+                        <td className="px-4 py-3 text-right text-slate-600">{Math.round(c.km).toLocaleString("pl-PL")}</td>
+                        <td className="px-4 py-3 text-right text-slate-700">{fmtEur(c.fracht)}</td>
+                        <td className="px-4 py-3 text-right text-slate-500">{fmtEur(c.cost)}</td>
+                        <td className={`px-4 py-3 text-right font-semibold ${marginColor(c.marginPct)}`}>{fmtEur(c.margin)}</td>
+                        <td className={`px-4 py-3 text-right font-bold ${marginColor(c.marginPct)}`}>{fmtPct(c.marginPct)}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex gap-1 justify-center flex-wrap text-[10px]">
+                            {c.profitable > 0 && <span className="bg-emerald-500 text-white rounded px-1.5 py-0.5">✓ {c.profitable}</span>}
+                            {c.breakeven > 0 && <span className="bg-amber-400 text-white rounded px-1.5 py-0.5">~ {c.breakeven}</span>}
+                            {c.lowMargin > 0 && <span className="bg-orange-400 text-white rounded px-1.5 py-0.5">↓ {c.lowMargin}</span>}
+                            {c.losses > 0 && <span className="bg-red-600 text-white rounded px-1.5 py-0.5 font-bold">✗ {c.losses}</span>}
+                            {c.noData > 0 && <span className="bg-slate-300 text-slate-700 rounded px-1.5 py-0.5">? {c.noData}</span>}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </div>
       )}
 
