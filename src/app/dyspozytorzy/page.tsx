@@ -26,6 +26,7 @@ interface Vehicle {
   leasing_eur_mo: number | null;
   insurance_eur_mo: number | null;
   service_cost_km: number | null;
+  service_contract: boolean | null;
   avg_km_month: number | null;
 }
 
@@ -228,7 +229,7 @@ export default function DyspozytorzyPage() {
     setLoading(true);
     const [{ data: disps }, { data: vehs }] = await Promise.all([
       supabase.from("dispatchers").select("*").eq("is_active", true).order("name"),
-      supabase.from("vehicles").select("reg,brand,model,vehicle_type,dispatcher_id,avg_fuel_l100,year_produced,leasing_eur_mo,insurance_eur_mo,service_cost_km,avg_km_month").eq("is_active", true).order("vehicle_type,reg"),
+      supabase.from("vehicles").select("reg,brand,model,vehicle_type,dispatcher_id,avg_fuel_l100,year_produced,leasing_eur_mo,insurance_eur_mo,service_cost_km,service_contract,avg_km_month").eq("is_active", true).order("vehicle_type,reg"),
     ]);
     setDispatchers(disps ?? []);
     setVehicles(vehs ?? []);
@@ -424,6 +425,7 @@ export default function DyspozytorzyPage() {
         trailerLeasingEurMo,
         insuranceEurMo: vData?.insurance_eur_mo ?? undefined,
         serviceCostKmOverride: vData?.service_cost_km ?? undefined,
+        serviceContract: vData?.service_contract ?? false,
         routeDays,
         overrideTollEur: tmsTollEur || undefined,
         perDobeShareFactor,

@@ -489,7 +489,7 @@ export default function BudzetPage() {
     (async () => {
       const { data } = await supabase
         .from("vehicles")
-        .select("reg, vehicle_type, leasing_eur_mo, insurance_eur_mo, service_cost_km, year_produced, avg_km_month")
+        .select("reg, vehicle_type, leasing_eur_mo, insurance_eur_mo, service_cost_km, service_contract, year_produced, avg_km_month")
         .order("reg");
       if (data) {
         // Pojazdy podwykonawców pomijamy całkowicie — ich koszty/leasing nie są kosztami floty B&M
@@ -499,6 +499,7 @@ export default function BudzetPage() {
           leasing_eur_mo:  v.leasing_eur_mo  ? Number(v.leasing_eur_mo)  : undefined,
           insurance_eur_mo: v.insurance_eur_mo ? Number(v.insurance_eur_mo) : undefined,
           service_cost_km: v.service_cost_km  ? Number(v.service_cost_km)  : undefined,
+          service_contract: v.service_contract ?? false,
           year_produced:   v.year_produced    ? Number(v.year_produced)    : undefined,
           avg_km_month:    v.avg_km_month     ? Number(v.avg_km_month)     : undefined,
         })));

@@ -19,6 +19,7 @@ export interface RouteInput {
   trailerLeasingEurMo?: number;    // naczepa leasing EUR/mo (from fleet pairing or avg)
   insuranceEurMo?: number;         // OC+AC EUR/mo per vehicle (from Supabase)
   serviceCostKmOverride?: number;  // EUR/km override per vehicle (from Supabase)
+  serviceContract?: boolean;       // true = serwis pokryty umową (najczęściej w racie leasingu) — koszt serwisu = 0
   avgKmPerMonthActual?: number;    // DEPRECATED — kept for backward compat, ignored if routeDays provided
   routeDays?: number;              // actual route duration in days (from TMS dates or ceil(km/570))
   vehicleYearProduced?: number;    // for service cost tier
@@ -232,9 +233,12 @@ export function calculateRoute(input: RouteInput, settings?: CalcSettings): Cost
 
   // 6. SERVICE — per-vehicle override (from Supabase) or fleet tier (new/old)
   // Uses totalKm (loaded + empty) — service/wear applies to all km driven
+  // Pojazdy z umową serwisową (service_contract) mają serwis pokryty stałą opłatą
+  // (najczęściej wliczoną w ratę leasingu) — nie doliczamy dodatkowego kosztu za km.
   const isNewVehicle = vehicleYearProduced ? vehicleYearProduced >= 2022 : false;
-  const serviceCostKm = input.serviceCostKmOverride
-    ?? (isNewVehicle ? FLEET.serviceCostNewKm : FLEET.serviceCostOldKm);
+  const serviceCostKm = input.serviceContract
+    ? 0
+    : input.serviceCostKmOverride ?? (isNewVehicle ? FLEET.serviceCostNewKm : FLEET.serviceCostOldKm);
   const serviceCost = serviceCostKm * totalKm;
 
   // 7a. LEASING CIĄGNIKA

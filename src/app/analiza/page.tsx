@@ -154,7 +154,7 @@ export default function AnalizaPage() {
     try {
       const { data: vehicles, error: dbErr } = await supabase
         .from("vehicles")
-        .select("reg, vehicle_type, dispatcher_id, avg_fuel_l100, year_produced, leasing_eur_mo, insurance_eur_mo, service_cost_km, avg_km_month");
+        .select("reg, vehicle_type, dispatcher_id, avg_fuel_l100, year_produced, leasing_eur_mo, insurance_eur_mo, service_cost_km, service_contract, avg_km_month");
 
       if (dbErr) setDebug(`DB warning: ${dbErr.message}`);
 
@@ -163,6 +163,7 @@ export default function AnalizaPage() {
       const leasingMap:       Record<string, number> = {};
       const insuranceMap:     Record<string, number> = {};
       const serviceMap:       Record<string, number> = {};
+      const serviceContractSet: Set<string> = new Set();
       const kmMonthMap:       Record<string, number> = {};
       // naczepa_reg → leasing EUR/mo (direct lookup from TMS naczepa column)
       const trailerLeasingMap: Record<string, number> = {};
@@ -174,6 +175,7 @@ export default function AnalizaPage() {
         if (v.leasing_eur_mo)   leasingMap[v.reg]   = Number(v.leasing_eur_mo);
         if (v.insurance_eur_mo) insuranceMap[v.reg] = Number(v.insurance_eur_mo);
         if (v.service_cost_km)  serviceMap[v.reg]   = Number(v.service_cost_km);
+        if (v.service_contract) serviceContractSet.add(v.reg);
         if (v.avg_km_month)     kmMonthMap[v.reg]   = Number(v.avg_km_month);
         if (v.vehicle_type === "naczepa" && v.leasing_eur_mo)
           trailerLeasingMap[v.reg] = Number(v.leasing_eur_mo);
@@ -275,6 +277,7 @@ export default function AnalizaPage() {
           const leasingEurMo          = leasingMap[vehicle];
           const insuranceEurMo        = insuranceMap[vehicle];
           const serviceCostKmOverride = serviceMap[vehicle];
+          const serviceContract       = serviceContractSet.has(vehicle);
           // Trailer leasing: (1) exact naczepa from TMS, (2) fleet avg naczep, (3) tier in calculator
           const trailerLeasingEurMo   = (naczepaReg && trailerLeasingMap[naczepaReg])
             ? trailerLeasingMap[naczepaReg]
@@ -344,7 +347,7 @@ export default function AnalizaPage() {
               transitCountries: [originCountry, destCountry],
               avgFuelL100, vehicleYearProduced: vehicleYear, leasingEurMo,
               trailerLeasingEurMo,
-              insuranceEurMo, serviceCostKmOverride, routeDays,
+              insuranceEurMo, serviceCostKmOverride, serviceContract, routeDays,
               overrideTollEur: tmsTollEur || undefined,
               perDobeShareFactor,
             }, settings);
@@ -362,7 +365,7 @@ export default function AnalizaPage() {
             transitCountries: [originCountry, destCountry],
             avgFuelL100, vehicleYearProduced: vehicleYear, leasingEurMo,
             trailerLeasingEurMo,
-            insuranceEurMo, serviceCostKmOverride, routeDays,
+            insuranceEurMo, serviceCostKmOverride, serviceContract, routeDays,
             overrideTollEur: tmsTollEur || undefined,
             perDobeShareFactor,
           }, settings);

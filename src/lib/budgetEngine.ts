@@ -16,6 +16,7 @@ export interface VehicleRecord {
   leasing_eur_mo?:   number;
   insurance_eur_mo?: number;
   service_cost_km?:  number;
+  service_contract?: boolean;
   year_produced?:    number;
   avg_km_month?:     number;
 }
@@ -147,9 +148,11 @@ export function buildVehicleBudget(
     // Toll
     tollEur = settings.tollEurPerKm * kmTarget;
 
-    // Service cost per km
+    // Service cost per km — umowa serwisowa pokrywa serwis stałą opłatą (zwykle w racie leasingu)
     const isNew      = (vehicle.year_produced ?? 0) >= 2022;
-    const svcKm      = vehicle.service_cost_km ?? (isNew ? FLEET.serviceCostNewKm : FLEET.serviceCostOldKm);
+    const svcKm       = vehicle.service_contract
+      ? 0
+      : vehicle.service_cost_km ?? (isNew ? FLEET.serviceCostNewKm : FLEET.serviceCostOldKm);
     serviceEur       = svcKm * kmTarget;
 
     // Driver — based on target km converted to route days

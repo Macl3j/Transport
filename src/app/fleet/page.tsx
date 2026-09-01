@@ -636,12 +636,19 @@ export default function FleetPage() {
                 <p className="text-xs font-bold text-indigo-600 uppercase tracking-wide mb-2">🛡️ Ubezpieczenie & Serwis</p>
               </div>
               {numField("OC+AC EUR/mc", "insurance_eur_mo", "EUR", "0.01")}
-              {numField("Serwis EUR/km", "service_cost_km", "EUR/km", "0.001")}
+              <label className="block">
+                <span className="text-xs text-slate-500">Serwis EUR/km{editVehicle.service_contract ? " (pokryte umową)" : ""}</span>
+                <input type="number" step="0.001"
+                  disabled={!!editVehicle.service_contract}
+                  value={editVehicle.service_contract ? 0 : (editVehicle.service_cost_km ?? "")}
+                  onChange={e => setEditVehicle({...editVehicle, service_cost_km: e.target.value ? +e.target.value : null})}
+                  className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none disabled:bg-slate-100 disabled:text-slate-400" />
+              </label>
               <label className="block">
                 <span className="text-xs text-slate-500">Umowa serwisowa</span>
                 <div className="mt-1 flex gap-1 bg-slate-100 rounded-lg p-1">
                   <button type="button"
-                    onClick={() => setEditVehicle({...editVehicle, service_contract: true})}
+                    onClick={() => setEditVehicle({...editVehicle, service_contract: true, service_cost_km: 0})}
                     className={`flex-1 py-1.5 rounded-md text-sm font-medium transition-colors ${
                       editVehicle.service_contract ? "bg-emerald-600 text-white shadow-sm" : "text-slate-500 hover:text-slate-700"
                     }`}>
