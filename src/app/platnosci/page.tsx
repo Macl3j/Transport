@@ -28,6 +28,7 @@ const RISK_INFO: Record<string, { icon: string; label: string; weight: number }>
   "Autostrady":                     { icon: "🔴", label: "operacyjne — blokada myta", weight: 3 },
   "Parkingi":                       { icon: "🔴", label: "operacyjne", weight: 3 },
   "AdBlue":                         { icon: "🔴", label: "operacyjne", weight: 3 },
+  "Leasing":                        { icon: "🟠", label: "strategiczne — ryzyko wypowiedzenia umowy i unieruchomienia pojazdu", weight: 2.5 },
   "Podatek od środków transportu":  { icon: "🟠", label: "podatkowe — ryzyko odsetek/kontroli", weight: 2.5 },
   "Faktura przewoźnika":            { icon: "🟡", label: "relacyjne — podwykonawca", weight: 2 },
 };
