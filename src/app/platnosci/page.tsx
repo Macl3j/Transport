@@ -324,6 +324,32 @@ export default function PlatnosciPage() {
     }).sort((a, b) => b.score - a.score);
   }, [outstanding, delayByVendorCat, delayByCat]);
 
+  type CalSortKey = "priorytet" | "dostawca" | "kategoria" | "kwota" | "termin" | "bufor";
+  const [calSortKey, setCalSortKey] = useState<CalSortKey>("priorytet");
+  const [calSortDesc, setCalSortDesc] = useState(true);
+  function toggleCalSort(key: CalSortKey) {
+    if (calSortKey === key) setCalSortDesc(d => !d);
+    else { setCalSortKey(key); setCalSortDesc(true); }
+  }
+  function CalSortIcon({ k }: { k: CalSortKey }) {
+    if (calSortKey !== k) return <span className="text-slate-300">↕</span>;
+    return <span className="text-slate-600">{calSortDesc ? "↓" : "↑"}</span>;
+  }
+  const sortedPrioritized = useMemo(() => {
+    const arr = [...prioritized];
+    const cmp: Record<CalSortKey, (a: typeof arr[0], b: typeof arr[0]) => number> = {
+      priorytet: (a, b) => a.score - b.score,
+      dostawca:  (a, b) => (a.inv.sprzedawca ?? "").localeCompare(b.inv.sprzedawca ?? ""),
+      kategoria: (a, b) => (a.inv.typ_kosztu ?? "").localeCompare(b.inv.typ_kosztu ?? ""),
+      kwota:     (a, b) => (a.inv.pozostalo_do_zaplaty_pln ?? a.inv.brutto_pln ?? 0) - (b.inv.pozostalo_do_zaplaty_pln ?? b.inv.brutto_pln ?? 0),
+      termin:    (a, b) => (a.inv.termin_platnosci ?? "").localeCompare(b.inv.termin_platnosci ?? ""),
+      bufor:     (a, b) => a.buf.p75 - b.buf.p75,
+    };
+    arr.sort(cmp[calSortKey]);
+    if (calSortDesc) arr.reverse();
+    return arr;
+  }, [prioritized, calSortKey, calSortDesc]);
+
   // ── Zakładka Dostawca ─────────────────────────────────────────
   const vendorList = useMemo(() => {
     const s = new Set<string>();
@@ -332,8 +358,8 @@ export default function PlatnosciPage() {
   }, [invoices]);
   const filteredVendors = useMemo(() => {
     const q = vendorQuery.trim().toLowerCase();
-    if (!q) return vendorList.slice(0, 30);
-    return vendorList.filter(v => v.toLowerCase().includes(q)).slice(0, 30);
+    if (!q) return vendorList;
+    return vendorList.filter(v => v.toLowerCase().includes(q));
   }, [vendorList, vendorQuery]);
   const vendorInvoices = useMemo(() => {
     if (!selectedVendor) return [];
@@ -434,23 +460,23 @@ export default function PlatnosciPage() {
       {!loading && tab === "kalendarz" && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
           <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 text-sm font-semibold text-slate-700 flex items-center justify-between">
-            <span>Kalendarz wymagalności — posortowane wg priorytetu (nie samego terminu)</span>
+            <span>Kalendarz wymagalności — domyślnie wg priorytetu (nie samego terminu), kliknij nagłówek by zmienić</span>
             <span className="text-xs text-slate-400 font-normal">{prioritized.length} faktur</span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-xs text-slate-500 border-b border-slate-100">
-                  <th className="px-4 py-2 font-medium">Dostawca</th>
-                  <th className="px-4 py-2 font-medium">Kategoria</th>
-                  <th className="px-4 py-2 font-medium text-right">Kwota</th>
-                  <th className="px-4 py-2 font-medium">Termin</th>
-                  <th className="px-4 py-2 font-medium">Bufor historyczny (p75)</th>
-                  <th className="px-4 py-2 font-medium">Status</th>
+                  <th className="px-4 py-2 font-medium cursor-pointer select-none hover:text-slate-700" onClick={() => toggleCalSort("dostawca")}>Dostawca <CalSortIcon k="dostawca" /></th>
+                  <th className="px-4 py-2 font-medium cursor-pointer select-none hover:text-slate-700" onClick={() => toggleCalSort("kategoria")}>Kategoria <CalSortIcon k="kategoria" /></th>
+                  <th className="px-4 py-2 font-medium text-right cursor-pointer select-none hover:text-slate-700" onClick={() => toggleCalSort("kwota")}>Kwota <CalSortIcon k="kwota" /></th>
+                  <th className="px-4 py-2 font-medium cursor-pointer select-none hover:text-slate-700" onClick={() => toggleCalSort("termin")}>Termin <CalSortIcon k="termin" /></th>
+                  <th className="px-4 py-2 font-medium cursor-pointer select-none hover:text-slate-700" onClick={() => toggleCalSort("bufor")}>Bufor historyczny (p75) <CalSortIcon k="bufor" /></th>
+                  <th className="px-4 py-2 font-medium cursor-pointer select-none hover:text-slate-700" onClick={() => toggleCalSort("priorytet")}>Status / priorytet <CalSortIcon k="priorytet" /></th>
                 </tr>
               </thead>
               <tbody>
-                {prioritized.slice(0, 200).map(({ inv, buf, statusLabel, statusColor, risk }) => (
+                {sortedPrioritized.slice(0, 200).map(({ inv, buf, statusLabel, statusColor, risk }) => (
                   <tr key={inv.id} className="border-b border-slate-50 hover:bg-slate-50">
                     <td className="px-4 py-2 font-medium text-slate-700">{inv.sprzedawca ?? "—"}</td>
                     <td className="px-4 py-2 text-xs">{risk.icon} {inv.typ_kosztu ?? "—"}</td>
@@ -477,6 +503,7 @@ export default function PlatnosciPage() {
               placeholder="Szukaj dostawcy…"
               className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500"
             />
+            <div className="text-xs text-slate-400 px-1">{filteredVendors.length} / {vendorList.length} dostawców</div>
             <div className="max-h-[60vh] overflow-y-auto divide-y divide-slate-50">
               {filteredVendors.map(v => (
                 <button key={v} onClick={() => setSelectedVendor(v)}
