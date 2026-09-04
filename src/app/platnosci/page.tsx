@@ -325,11 +325,16 @@ export default function PlatnosciPage() {
   }, [outstanding, delayByVendorCat, delayByCat]);
 
   type CalSortKey = "priorytet" | "dostawca" | "kategoria" | "kwota" | "termin" | "bufor";
+  // Kierunek sortowania przy pierwszym kliknięciu — intuicyjny per kolumna
+  // (tekst: A→Z, kwota/priorytet/bufor: od największych, termin: od najwcześniejszego).
+  const CAL_DEFAULT_DESC: Record<CalSortKey, boolean> = {
+    priorytet: true, dostawca: false, kategoria: false, kwota: true, termin: false, bufor: true,
+  };
   const [calSortKey, setCalSortKey] = useState<CalSortKey>("priorytet");
   const [calSortDesc, setCalSortDesc] = useState(true);
   function toggleCalSort(key: CalSortKey) {
     if (calSortKey === key) setCalSortDesc(d => !d);
-    else { setCalSortKey(key); setCalSortDesc(true); }
+    else { setCalSortKey(key); setCalSortDesc(CAL_DEFAULT_DESC[key]); }
   }
   function CalSortIcon({ k }: { k: CalSortKey }) {
     if (calSortKey !== k) return <span className="text-slate-300">↕</span>;
