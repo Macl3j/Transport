@@ -22,6 +22,7 @@ const TRANSPORT_LINKS: { href: string; label: string }[] = [
   { href: "/opony",         label: "Opony" },
   { href: "/checklista",    label: "Checklista" },
   { href: "/budzet",        label: "Budżet" },
+  { href: "/platnosci",     label: "Płatności 💰" },
   { href: "/import",        label: "Import" },
   { href: "/konfiguracja",  label: "⚙️" },
 ];
