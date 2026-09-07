@@ -1,8 +1,11 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import dynamic from "next/dynamic";
 import type { AuthSession as Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
+
+const CrmMap = dynamic(() => import("@/components/CrmMap"), { ssr: false });
 
 // ── Typy ─────────────────────────────────────────────────────
 type ContactStatus = "prospekt" | "w_negocjacji" | "aktywny" | "stracony";
@@ -24,6 +27,8 @@ interface Contact {
   address: string | null;
   city: string | null;
   address_source: string | null;
+  lat: number | null;
+  lng: number | null;
 }
 
 interface Profile {
@@ -65,6 +70,13 @@ const STATUS_COLORS: Record<ContactStatus, string> = {
   w_negocjacji: "bg-amber-100 text-amber-700",
   aktywny: "bg-emerald-100 text-emerald-700",
   stracony: "bg-red-100 text-red-600",
+};
+// Kolory pinezek na mapie CRM — muszą być zgodne z STATUS_DOT w components/CrmMap.tsx
+const STATUS_DOT: Record<ContactStatus, string> = {
+  prospekt: "#64748b",
+  w_negocjacji: "#d97706",
+  aktywny: "#059669",
+  stracony: "#dc2626",
 };
 const ACTIVITY_LABELS: Record<ActivityType, string> = {
   call: "📞 Telefon", email: "✉️ E-mail", meeting: "🤝 Spotkanie", note: "📝 Notatka",
@@ -206,6 +218,7 @@ function CrmDashboard({ session }: { session: Session }) {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | ContactStatus>("all");
+  const [view, setView] = useState<"lista" | "mapa">("lista");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [newForm, setNewForm] = useState({ company_name: "", nip: "", contact_person: "", phone: "", email: "", routes: "" });
@@ -359,57 +372,105 @@ function CrmDashboard({ session }: { session: Session }) {
         </div>
       </div>
 
-      {/* Lista + panel szczegółów */}
-      <div className="flex gap-5 flex-wrap items-start">
-        <div className="flex-1 min-w-[340px] card p-0 overflow-hidden">
-          {loading ? (
-            <div className="p-6 text-slate-400 text-sm">Ładowanie…</div>
-          ) : filtered.length === 0 ? (
-            <div className="p-6 text-slate-400 text-sm text-center">Brak kontaktów</div>
-          ) : (
-            <div className="divide-y divide-slate-100 max-h-[70vh] overflow-y-auto">
-              {filtered.map((c) => {
-                const badge = nextActionBadge(c.next_action_date);
-                return (
-                  <button
-                    key={c.id}
-                    onClick={() => setSelectedId(c.id)}
-                    className={`w-full text-left px-4 py-3 hover:bg-slate-50 transition-colors ${
-                      selectedId === c.id ? "bg-blue-50" : ""
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-semibold text-slate-800 text-sm">{c.company_name}</span>
-                      <span className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${STATUS_COLORS[c.status]}`}>
-                        {STATUS_LABELS[c.status]}
-                      </span>
-                    </div>
-                    <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap gap-x-3">
-                      {c.contact_person && <span>{c.contact_person}</span>}
-                      {c.routes && <span>🛣️ {c.routes}</span>}
-                    </div>
-                    <div className={`text-xs mt-1.5 inline-block px-2 py-0.5 rounded ${badge.cls}`}>
-                      {badge.text}
-                    </div>
-                  </button>
-                );
-              })}
+      {/* Przełącznik widoku */}
+      <div className="flex gap-1 border-b border-slate-200">
+        {(["lista", "mapa"] as const).map((v) => (
+          <button
+            key={v}
+            onClick={() => setView(v)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              view === v ? "border-blue-600 text-blue-600" : "border-transparent text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            {v === "lista" ? "Lista" : "🗺️ Mapa"}
+          </button>
+        ))}
+      </div>
+
+      {view === "lista" ? (
+        /* Lista + panel szczegółów */
+        <div className="flex gap-5 flex-wrap items-start">
+          <div className="flex-1 min-w-[340px] card p-0 overflow-hidden">
+            {loading ? (
+              <div className="p-6 text-slate-400 text-sm">Ładowanie…</div>
+            ) : filtered.length === 0 ? (
+              <div className="p-6 text-slate-400 text-sm text-center">Brak kontaktów</div>
+            ) : (
+              <div className="divide-y divide-slate-100 max-h-[70vh] overflow-y-auto">
+                {filtered.map((c) => {
+                  const badge = nextActionBadge(c.next_action_date);
+                  return (
+                    <button
+                      key={c.id}
+                      onClick={() => setSelectedId(c.id)}
+                      className={`w-full text-left px-4 py-3 hover:bg-slate-50 transition-colors ${
+                        selectedId === c.id ? "bg-blue-50" : ""
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-slate-800 text-sm">{c.company_name}</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${STATUS_COLORS[c.status]}`}>
+                          {STATUS_LABELS[c.status]}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap gap-x-3">
+                        {c.contact_person && <span>{c.contact_person}</span>}
+                        {c.routes && <span>🛣️ {c.routes}</span>}
+                      </div>
+                      <div className={`text-xs mt-1.5 inline-block px-2 py-0.5 rounded ${badge.cls}`}>
+                        {badge.text}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {selectedId && (
+            <div className="flex-1 min-w-[360px]">
+              <ContactDetail
+                contactId={selectedId}
+                session={session}
+                profiles={profiles}
+                onClose={() => setSelectedId(null)}
+                onChanged={load}
+              />
             </div>
           )}
         </div>
-
-        {selectedId && (
-          <div className="flex-1 min-w-[360px]">
-            <ContactDetail
-              contactId={selectedId}
-              session={session}
-              profiles={profiles}
-              onClose={() => setSelectedId(null)}
-              onChanged={load}
-            />
+      ) : (
+        /* Mapa + panel szczegółów */
+        <div className="flex gap-5 flex-wrap items-start">
+          <div className="flex-1 min-w-[340px] space-y-2">
+            <CrmMap contacts={filtered} onSelect={setSelectedId} />
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 px-1">
+              {(Object.keys(STATUS_LABELS) as ContactStatus[]).map((s) => (
+                <span key={s} className="flex items-center gap-1.5">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: STATUS_DOT[s] }} />
+                  {STATUS_LABELS[s]}
+                </span>
+              ))}
+              <span className="ml-auto">
+                {filtered.filter((c) => c.lat != null && c.lng != null).length} z {filtered.length} kontaktów na mapie
+                {filtered.some((c) => c.lat == null) && " (reszta nie ma jeszcze adresu lub współrzędnych)"}
+              </span>
+            </div>
           </div>
-        )}
-      </div>
+
+          {selectedId && (
+            <div className="flex-1 min-w-[360px]">
+              <ContactDetail
+                contactId={selectedId}
+                session={session}
+                profiles={profiles}
+                onClose={() => setSelectedId(null)}
+                onChanged={load}
+              />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -458,6 +519,28 @@ function ContactDetail({
   async function saveContact() {
     if (!contact) return;
     setSaving(true);
+    let lat: number | null = contact.lat ?? null;
+    let lng: number | null = contact.lng ?? null;
+    const addressChanged = (form.address || "") !== (contact.address || "") || (form.city || "") !== (contact.city || "");
+    if (addressChanged) {
+      const query = form.address || form.city || "";
+      if (query.trim()) {
+        try {
+          const res = await fetch("/api/crm/geocode", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+            body: JSON.stringify({ query }),
+          });
+          const json = await res.json();
+          lat = json.ok ? json.lat : null;
+          lng = json.ok ? json.lng : null;
+        } catch {
+          lat = null; lng = null;
+        }
+      } else {
+        lat = null; lng = null;
+      }
+    }
     await supabase.from("crm_contacts").update({
       company_name: form.company_name,
       nip: form.nip || null,
@@ -470,6 +553,7 @@ function ContactDetail({
       address: form.address || null,
       city: form.city || null,
       address_source: form.address_source ?? null,
+      lat, lng,
       updated_at: new Date().toISOString(),
     }).eq("id", contactId);
     setSaving(false);
