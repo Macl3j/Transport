@@ -12,6 +12,7 @@ interface Props {
   onSave: () => void;
   saving: boolean;
   saved: boolean;
+  saveError?: string | null;
 }
 
 const COLORS = [
@@ -32,7 +33,7 @@ const fmt = (n: number) =>
 const fmtEur = (n: number) => `${fmt(n)} EUR`;
 
 export default function CostBreakdown({
-  result, freightEur, distanceKm, onSave, saving, saved,
+  result, freightEur, distanceKm, onSave, saving, saved, saveError,
 }: Props) {
   const { label, color } = profitabilityLabel(result.marginPct);
 
@@ -169,7 +170,7 @@ export default function CostBreakdown({
       </div>
 
       {/* ── Save button ── */}
-      <div className="flex justify-end">
+      <div className="flex flex-col items-end gap-1.5">
         <button
           onClick={onSave}
           disabled={saving || saved}
@@ -177,6 +178,11 @@ export default function CostBreakdown({
         >
           {saved ? "✓ Zapisano" : saving ? "Zapisuję..." : "Zapisz kalkulację"}
         </button>
+        {saveError && (
+          <p className="text-xs text-red-600 max-w-xs text-right">
+            Błąd zapisu: {saveError}
+          </p>
+        )}
       </div>
     </div>
   );

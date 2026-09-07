@@ -42,6 +42,7 @@ export default function RouteCalculator() {
   const [result, setResult] = useState<CostBreakdownType | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [overrideTollEur, setOverrideTollEur] = useState<number | undefined>(undefined);
   const [showRouteFinder, setShowRouteFinder] = useState(false);
 
@@ -97,6 +98,7 @@ export default function RouteCalculator() {
 
   const handleCalculate = () => {
     setSaved(false);
+    setSaveError(null);
     const input: RouteInput = {
       originCountry: form.originCountry,
       destCountry: form.destCountry,
@@ -117,6 +119,7 @@ export default function RouteCalculator() {
   const handleSave = async () => {
     if (!result) return;
     setSaving(true);
+    setSaveError(null);
     const payload = {
       origin_country: form.originCountry,
       dest_country: form.destCountry,
@@ -135,8 +138,9 @@ export default function RouteCalculator() {
       min_freight_eur: result.minProfitableFreight,
       notes: form.notes || null,
     };
-    await supabase.from("route_calculations").insert(payload);
+    const { error } = await supabase.from("route_calculations").insert(payload);
     setSaving(false);
+    if (error) { setSaveError(error.message); return; }
     setSaved(true);
   };
 
@@ -339,6 +343,7 @@ export default function RouteCalculator() {
             onSave={handleSave}
             saving={saving}
             saved={saved}
+            saveError={saveError}
           />
         ) : (
           <div className="card h-full flex items-center justify-center text-center">
