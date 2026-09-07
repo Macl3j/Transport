@@ -18,9 +18,20 @@ interface Vehicle {
   service_cost_km: number | null;
   avg_km_month: number | null;
   is_active: boolean;
+  status_reason: string | null;
   service_contract: boolean | null;
   leasing_end_date: string | null;
   buyout_eur: number | null;
+}
+
+// Powód wyłączenia z eksploatacji — używane gdy is_active=false
+const STATUS_REASONS: Record<string, { label: string; badge: string; color: string }> = {
+  uziemiony:         { label: "Uziemiony / na sprzedaż", badge: "Uziemiony", color: "bg-slate-200 text-slate-600" },
+  wycofany_awaria:   { label: "Wycofany — poważna awaria", badge: "Wycofany (awaria)", color: "bg-red-100 text-red-700" },
+  wycofany_wypadek:  { label: "Wycofany — wypadek", badge: "Wycofany (wypadek)", color: "bg-red-100 text-red-700" },
+};
+function isWycofany(reason: string | null | undefined) {
+  return !!reason && reason.startsWith("wycofany");
 }
 
 type SortKey = keyof Pick<Vehicle, "reg" | "brand" | "year_produced" | "odometer_km" | "avg_fuel_l100" | "leasing_eur_mo">;
@@ -32,7 +43,7 @@ const EMPTY_VEHICLE: VehicleDraft = {
   reg: "", brand: null, model: null, vehicle_type: "ciągnik",
   year_produced: null, odometer_km: null, avg_fuel_l100: null,
   leasing_eur_mo: null, leasing_brutto_eur_mo: null, insurance_eur_mo: null,
-  service_cost_km: null, avg_km_month: null,
+  service_cost_km: null, avg_km_month: null, status_reason: null,
   service_contract: false, leasing_end_date: null, buyout_eur: null,
 };
 
@@ -49,6 +60,7 @@ export default function FleetPage() {
   const [filterOdo, setFilterOdo] = useState("all");
   const [filterLeasing, setFilterLeasing] = useState("all");
   const [filterType, setFilterType] = useState("all");
+  const [filterReason, setFilterReason] = useState<"all" | "uziemiony" | "wycofany">("all");
 
   // Sort
   const [sortKey, setSortKey] = useState<SortKey>("reg");
@@ -68,7 +80,7 @@ export default function FleetPage() {
     // Load ALL vehicles — no is_active filter here, we filter in UI
     const { data } = await supabase
       .from("vehicles")
-      .select("id,reg,brand,model,vehicle_type,year_produced,odometer_km,avg_fuel_l100,leasing_eur_mo,leasing_brutto_eur_mo,insurance_eur_mo,service_cost_km,avg_km_month,is_active,service_contract,leasing_end_date,buyout_eur")
+      .select("id,reg,brand,model,vehicle_type,year_produced,odometer_km,avg_fuel_l100,leasing_eur_mo,leasing_brutto_eur_mo,insurance_eur_mo,service_cost_km,avg_km_month,is_active,status_reason,service_contract,leasing_end_date,buyout_eur")
       .order("vehicle_type,reg");
     setVehicles(data ?? []);
     setLoading(false);
@@ -76,7 +88,9 @@ export default function FleetPage() {
 
   async function toggleActive(v: Vehicle) {
     setTogglingId(v.id);
-    await supabase.from("vehicles").update({ is_active: !v.is_active }).eq("id", v.id);
+    // Przywrócenie do eksploatacji czyści powód wycofania — nie jest już aktualny.
+    const patch = v.is_active ? { is_active: false } : { is_active: true, status_reason: null };
+    await supabase.from("vehicles").update(patch).eq("id", v.id);
     setTogglingId(null);
     await loadVehicles();
   }
@@ -104,6 +118,9 @@ export default function FleetPage() {
       service_contract:     v.service_contract,
       leasing_end_date:     v.leasing_end_date,
       buyout_eur:           v.buyout_eur,
+      status_reason:        v.status_reason,
+      // Wybranie powodu wyłączenia w formularzu od razu wyłącza pojazd z eksploatacji.
+      ...(v.status_reason ? { is_active: false } : {}),
     };
 
     if (v.id) {
@@ -194,6 +211,8 @@ export default function FleetPage() {
     if (filterOdo === "ok") list = list.filter(v => (v.odometer_km ?? 0) < 700_000);
     if (filterLeasing === "yes") list = list.filter(v => v.leasing_eur_mo && v.leasing_eur_mo > 0);
     if (filterLeasing === "no") list = list.filter(v => !v.leasing_eur_mo || v.leasing_eur_mo === 0);
+    if (filterReason === "uziemiony") list = list.filter(v => v.status_reason === "uziemiony");
+    if (filterReason === "wycofany") list = list.filter(v => isWycofany(v.status_reason));
 
     list.sort((a, b) => {
       const av = a[sortKey] ?? "";
@@ -205,7 +224,7 @@ export default function FleetPage() {
     });
 
     return list;
-  }, [vehicles, search, filterType, filterBrand, filterYear, filterOdo, filterLeasing, sortKey, sortDesc]);
+  }, [vehicles, search, filterType, filterBrand, filterYear, filterOdo, filterLeasing, filterReason, filterActive, sortKey, sortDesc]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDesc(d => !d);
@@ -238,14 +257,15 @@ export default function FleetPage() {
 
   const resetFilters = () => {
     setSearch(""); setFilterType("all"); setFilterBrand("all"); setFilterYear("all");
-    setFilterOdo("all"); setFilterLeasing("all");
+    setFilterOdo("all"); setFilterLeasing("all"); setFilterReason("all");
     // Don't reset filterActive — user picks that intentionally
   };
-  const hasFilters = search || filterType !== "all" || filterBrand !== "all" || filterYear !== "all" || filterOdo !== "all" || filterLeasing !== "all";
+  const hasFilters = search || filterType !== "all" || filterBrand !== "all" || filterYear !== "all" || filterOdo !== "all" || filterLeasing !== "all" || filterReason !== "all";
 
   // Stats (always on active vehicles for KPI bar)
   const activeVehicles = vehicles.filter(v => v.is_active);
   const inactiveCount  = vehicles.filter(v => !v.is_active).length;
+  const wycofaneCount  = vehicles.filter(v => isWycofany(v.status_reason)).length;
   const critical    = activeVehicles.filter(v => (v.odometer_km ?? 0) >= 900_000).length;
   const warn        = activeVehicles.filter(v => (v.odometer_km ?? 0) >= 700_000 && (v.odometer_km ?? 0) < 900_000).length;
   const withLeasing = activeVehicles.filter(v => v.leasing_eur_mo && v.leasing_eur_mo > 50).length;
@@ -304,7 +324,7 @@ export default function FleetPage() {
       </div>
 
       {/* KPI mini — klikalne: filtrują tabelę wg przebiegu */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <button type="button" onClick={() => setFilterOdo("all")}
           className={`card py-3 text-left transition-shadow ${filterOdo === "all" ? "ring-2 ring-blue-400" : "hover:shadow-md"}`}>
           <p className="text-xs text-slate-500 uppercase tracking-wide">Łącznie aktywnych</p>
@@ -332,6 +352,12 @@ export default function FleetPage() {
           <p className="text-2xl font-bold text-slate-800 mt-0.5">{avgFuel} <span className="text-sm font-normal">l/100km</span></p>
           <p className="text-xs text-slate-400">leasing: {withLeasing} pojazdów</p>
         </div>
+        <button type="button" onClick={() => { setFilterActive("all"); setFilterReason(filterReason === "wycofany" ? "all" : "wycofany"); }}
+          className={`card py-3 text-left transition-shadow ${wycofaneCount > 0 ? "border-l-4 border-red-500" : ""} ${filterReason === "wycofany" ? "ring-2 ring-red-400" : "hover:shadow-md"}`}>
+          <p className="text-xs text-slate-500 uppercase tracking-wide">Wycofane (awaria/wypadek)</p>
+          <p className={`text-2xl font-bold mt-0.5 ${wycofaneCount > 0 ? "text-red-600" : "text-slate-800"}`}>{wycofaneCount}</p>
+          <p className="text-xs text-slate-400">nie mogą być użyte do transportu</p>
+        </button>
       </div>
 
       {/* Filters */}
@@ -402,6 +428,17 @@ export default function FleetPage() {
             </select>
           </div>
 
+          {/* Powód wyłączenia */}
+          <div>
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">Powód wyłączenia</label>
+            <select value={filterReason} onChange={e => setFilterReason(e.target.value as typeof filterReason)}
+              className="px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+              <option value="all">Wszystkie</option>
+              <option value="uziemiony">Uziemiony / na sprzedaż</option>
+              <option value="wycofany">Wycofany (awaria/wypadek)</option>
+            </select>
+          </div>
+
           {/* Reset */}
           {hasFilters && (
             <button onClick={resetFilters}
@@ -454,8 +491,10 @@ export default function FleetPage() {
                 <td className="px-4 py-3 font-mono font-semibold text-slate-800">
                   {v.reg}
                   {!v.is_active && (
-                    <span className="ml-2 px-1.5 py-0.5 bg-slate-200 text-slate-500 text-[10px] font-bold rounded uppercase tracking-wide">
-                      Wyłączony
+                    <span className={`ml-2 px-1.5 py-0.5 text-[10px] font-bold rounded uppercase tracking-wide ${
+                      v.status_reason ? STATUS_REASONS[v.status_reason]?.color ?? "bg-slate-200 text-slate-500" : "bg-slate-200 text-slate-500"
+                    }`}>
+                      {v.status_reason ? STATUS_REASONS[v.status_reason]?.badge ?? "Wyłączony" : "Wyłączony"}
                     </span>
                   )}
                 </td>
@@ -662,6 +701,25 @@ export default function FleetPage() {
                     Nie
                   </button>
                 </div>
+              </label>
+
+              <div className="col-span-2 border-t pt-3">
+                <p className="text-xs font-bold text-red-600 uppercase tracking-wide mb-2">🚫 Wyłączenie z eksploatacji</p>
+              </div>
+              <label className="block col-span-2">
+                <span className="text-xs text-slate-500">Powód (jeśli pojazd nie może być używany do transportu)</span>
+                <select
+                  value={editVehicle.status_reason ?? ""}
+                  onChange={e => setEditVehicle({...editVehicle, status_reason: e.target.value || null})}
+                  className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+                  <option value="">— aktywny / brak powodu —</option>
+                  <option value="uziemiony">Uziemiony / na sprzedaż</option>
+                  <option value="wycofany_awaria">Wycofany — poważna awaria</option>
+                  <option value="wycofany_wypadek">Wycofany — wypadek</option>
+                </select>
+                {editVehicle.status_reason && (
+                  <p className="text-xs text-red-600 mt-1">Zapisanie tego powodu automatycznie wyłączy pojazd z eksploatacji.</p>
+                )}
               </label>
             </div>
 
