@@ -472,7 +472,7 @@ export default function FleetPage() {
               <th className="text-center px-2.5 py-2.5 text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">Typ</th>
               <th className="text-center px-2.5 py-2.5 text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">Ubezp. / serwis</th>
               <th className="text-center px-2.5 py-2.5 text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">Status</th>
-              <th className="text-center px-2 py-2.5 text-xs font-semibold text-slate-400 uppercase w-16 sticky right-0 bg-slate-50 border-l border-slate-200"></th>
+              <th className="text-center px-2 py-2.5 text-xs font-semibold text-slate-400 uppercase w-16 sticky right-0 z-10 bg-slate-50 border-l border-slate-200"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -573,7 +573,7 @@ export default function FleetPage() {
                     {togglingId === v.id ? "…" : v.is_active ? "✓ Aktywny" : "Wyłączony"}
                   </button>
                 </td>
-                <td className={`px-2 py-2.5 text-center sticky right-0 border-l border-slate-200 ${rowBg} group-hover:bg-slate-50`}>
+                <td className={`px-2 py-2.5 text-center sticky right-0 z-10 border-l border-slate-200 ${rowBg} group-hover:bg-slate-50`}>
                   <button onClick={() => { setSaveError(null); setEditVehicle({...v}); }}
                     className="px-2.5 py-1 text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg font-medium transition-colors">
                     Edytuj
