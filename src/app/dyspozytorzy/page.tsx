@@ -1343,17 +1343,19 @@ export default function DyspozytorzyPage() {
                                   const gap = s.gaps.find(g => g.prevRoute === r);
                                   const routeWidth = Math.max(60, (r.routeDays || 1) * 28);
                                   const gapWidth = gap ? Math.max(24, gap.idleDays * 20) : 0;
-                                  const rColor = r.marginPct >= 15 ? "bg-emerald-500" : r.marginPct >= 5 ? "bg-amber-400" : r.marginPct >= 0 ? "bg-orange-400" : "bg-red-500";
+                                  const rColor = r.noFreightData ? "bg-slate-400" : r.marginPct >= 15 ? "bg-emerald-500" : r.marginPct >= 5 ? "bg-amber-400" : r.marginPct >= 0 ? "bg-orange-400" : "bg-red-500";
                                   return (
                                     <div key={r.orderNr} className="flex items-stretch">
                                       {/* Route block */}
                                       <div
-                                        title={`${r.orderNr} | ${r.originCountry}→${r.destCountry} | ${r.routeDays?.toFixed(1)}d | ${r.tripDate}→${r.deliveryDate} | ${r.marginEur >= 0 ? "+" : ""}${Math.round(r.marginEur)}€`}
+                                        title={`${r.orderNr} | ${r.originCountry}→${r.destCountry} | ${r.routeDays?.toFixed(1)}d | ${r.tripDate}→${r.deliveryDate} | ${r.noFreightData ? "brak faktury — pokazany koszt bez znanego przychodu" : `${r.marginEur >= 0 ? "+" : ""}${Math.round(r.marginEur)}€`}`}
                                         className={`${rColor} text-white flex flex-col justify-center items-center px-2 py-2 rounded-lg`}
                                         style={{ minWidth: routeWidth }}>
                                         <span className="font-semibold truncate max-w-full">{r.originCountry}→{r.destCountry}</span>
                                         <span className="opacity-80">{r.routeDays?.toFixed(1)}d</span>
-                                        <span className="opacity-90 font-medium">{r.marginEur >= 0 ? "+" : ""}{Math.round(r.marginEur)}€</span>
+                                        <span className="opacity-90 font-medium">
+                                          {r.noFreightData ? "koszt: " : r.marginEur >= 0 ? "+" : ""}{Math.round(r.marginEur)}€
+                                        </span>
                                       </div>
                                       {/* Gap block */}
                                       {gap && (
@@ -1377,6 +1379,7 @@ export default function DyspozytorzyPage() {
                                 <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-emerald-500 inline-block"/>Rentowna</span>
                                 <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-400 inline-block"/>Niska marża</span>
                                 <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-500 inline-block"/>Strata</span>
+                                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-slate-400 inline-block"/>Brak faktury (tylko koszt)</span>
                                 <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-slate-200 border border-dashed border-slate-400 inline-block"/>Postój (koszt)</span>
                               </div>
                             </div>
@@ -1401,7 +1404,9 @@ export default function DyspozytorzyPage() {
                                 <div className="text-xs text-slate-400 mb-0.5">Realna marża</div>
                                 <div className={`font-bold ${trueMarginColor}`}>
                                   {s.trueMonthlyMargin >= 0 ? "+" : ""}{fmtEur(s.trueMonthlyMargin)}
-                                  <span className="text-xs font-normal ml-1">({fmtPct(s.trueMarginPct)})</span>
+                                  <span className="text-xs font-normal ml-1">
+                                    {s.totalFreight > 0 ? `(${fmtPct(s.trueMarginPct)})` : "(brak faktur)"}
+                                  </span>
                                 </div>
                               </div>
                             </div>
