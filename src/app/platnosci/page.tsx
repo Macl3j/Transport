@@ -482,7 +482,7 @@ export default function PlatnosciPage() {
                 </tr>
               </thead>
               <tbody>
-                {sortedPrioritized.slice(0, 200).map(({ inv, buf, statusLabel, statusColor, risk }) => (
+                {sortedPrioritized.map(({ inv, buf, statusLabel, statusColor, risk }) => (
                   <tr key={inv.id} className="border-b border-slate-50 hover:bg-slate-50">
                     <td className="px-4 py-2 font-medium text-slate-700">{inv.sprzedawca ?? "—"}</td>
                     <td className="px-4 py-2 text-xs">{risk.icon} {inv.typ_kosztu ?? "—"}</td>
@@ -565,7 +565,7 @@ export default function PlatnosciPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {vendorInvoices.slice(0, 100).map(inv => (
+                        {vendorInvoices.map(inv => (
                           <tr key={inv.id} className="border-b border-slate-50">
                             <td className="px-4 py-1.5 text-xs text-slate-500">{inv.numer ?? "—"}</td>
                             <td className="px-4 py-1.5 text-xs">{fmtDate(inv.termin_platnosci)}</td>
