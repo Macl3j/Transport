@@ -108,6 +108,9 @@ export default function ChecklistaPage() {
   const [msg, setMsg]                 = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [history, setHistory]         = useState<SavedChecklist[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [historySearch, setHistorySearch] = useState("");
+  const [historySortKey, setHistorySortKey] = useState<"date" | "vehicle" | "driver" | "status">("date");
+  const [historySortDesc, setHistorySortDesc] = useState(true);
   const [printMode, setPrintMode]     = useState(false);
   const [savedId, setSavedId]         = useState<string | null>(null);
   const [driverSignature, setDriverSignature]     = useState<string | null>(null);
@@ -141,6 +144,30 @@ export default function ChecklistaPage() {
     const t = setTimeout(() => loadHistory(vehicleReg), 600);
     return () => clearTimeout(t);
   }, [vehicleReg, loadHistory]);
+
+  // ── wyszukiwanie i sortowanie już wczytanej historii ──────────────────────
+  const displayedHistory = (() => {
+    const q = historySearch.trim().toLowerCase();
+    let list = !q ? history : history.filter((c) =>
+      c.vehicle_reg?.toLowerCase().includes(q) ||
+      c.driver_name?.toLowerCase().includes(q) ||
+      c.mechanic_name?.toLowerCase().includes(q) ||
+      c.notes?.toLowerCase().includes(q)
+    );
+    list = [...list].sort((a, b) => {
+      let cmp = 0;
+      if (historySortKey === "date") cmp = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      else if (historySortKey === "vehicle") cmp = (a.vehicle_reg ?? "").localeCompare(b.vehicle_reg ?? "", "pl");
+      else if (historySortKey === "driver") cmp = (a.driver_name ?? "").localeCompare(b.driver_name ?? "", "pl");
+      else if (historySortKey === "status") cmp = (a.overall_status ?? "").localeCompare(b.overall_status ?? "", "pl");
+      return historySortDesc ? -cmp : cmp;
+    });
+    return list;
+  })();
+  function toggleHistorySort(key: typeof historySortKey) {
+    if (historySortKey === key) setHistorySortDesc((d) => !d);
+    else { setHistorySortKey(key); setHistorySortDesc(true); }
+  }
 
   // ── zmiana statusu pozycji ────────────────────────────────────────────
   function cycleStatus(id: string) {
@@ -616,18 +643,53 @@ export default function ChecklistaPage() {
 
         {/* ── HISTORIA ── */}
         <div className="no-print">
-          <h2 className="text-lg font-bold text-slate-700 mb-3">
-            {vehicleReg.trim() ? `Historia checklisty — ${vehicleReg.toUpperCase()}` : "Historia checklisty — cała flota"}
-          </h2>
+          <div className="flex items-center justify-between flex-wrap gap-3 mb-3">
+            <h2 className="text-lg font-bold text-slate-700">
+              {vehicleReg.trim() ? `Historia checklisty — ${vehicleReg.toUpperCase()}` : "Historia checklisty — cała flota"}
+            </h2>
+            {history.length > 0 && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <input
+                  type="text"
+                  value={historySearch}
+                  onChange={(e) => setHistorySearch(e.target.value)}
+                  placeholder="Szukaj: pojazd, kierowca, mechanik…"
+                  className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-[#1F3864] w-64"
+                />
+                <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1 text-xs">
+                  {([
+                    ["date", "Data"],
+                    ["vehicle", "Pojazd"],
+                    ["driver", "Kierowca"],
+                    ["status", "Status"],
+                  ] as [typeof historySortKey, string][]).map(([key, label]) => (
+                    <button
+                      key={key}
+                      onClick={() => toggleHistorySort(key)}
+                      className={`px-2.5 py-1 rounded-md font-medium transition-colors ${
+                        historySortKey === key ? "bg-white text-[#1F3864] shadow-sm" : "text-slate-500 hover:text-slate-700"
+                      }`}
+                    >
+                      {label}{historySortKey === key ? (historySortDesc ? " ↓" : " ↑") : ""}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
           {loadingHistory ? (
             <div className="text-sm text-slate-400">Ładowanie…</div>
           ) : history.length === 0 ? (
             <div className="text-sm text-slate-400 bg-slate-50 rounded-lg p-4">
               {vehicleReg.trim() ? "Brak zapisanych checklisty dla tego pojazdu." : "Brak zapisanych checklist."}
             </div>
+          ) : displayedHistory.length === 0 ? (
+            <div className="text-sm text-slate-400 bg-slate-50 rounded-lg p-4">
+              Brak checklist pasujących do wyszukiwania &bdquo;{historySearch}&rdquo;.
+            </div>
           ) : (
               <div className="space-y-2">
-                {history.map((c) => {
+                {displayedHistory.map((c) => {
                   const cOk   = (c.items as ChecklistItem[]).filter((i) => i.status === "ok").length;
                   const cBrak = (c.items as ChecklistItem[]).filter((i) => i.status === "brak").length;
                   const cUsz  = (c.items as ChecklistItem[]).filter((i) => i.status === "uszkodzone").length;
