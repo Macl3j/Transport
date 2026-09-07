@@ -1763,6 +1763,23 @@ export default function DyspozytorzyPage() {
             diagnoses.push(`Marża ${fmtPct(r.marginPct)} — koszty (${Math.round(r.totalCost)} €) poniżej frachtu (${Math.round(r.frachtEur)} €), rezerwa ${Math.round(r.marginEur)} €`);
         }
 
+        // Trasy sąsiednie tego samego pojazdu — kontekst: czy strata na tej trasie
+        // jest skompensowana przez trasę bezpośrednio przed/po (np. przejazd
+        // pozycjonujący przed płatnym powrotem tym samym ciągnikiem).
+        const rTripTs = r.tripTimestamp ?? new Date(r.tripDate).getTime();
+        const rDeliveryTs = r.deliveryTimestamp ?? new Date(r.deliveryDate).getTime();
+        const sameVehicleRoutes = allRoutes.filter(x => x.vehicle === r.vehicle && x.orderNr !== r.orderNr);
+        const prevRoute = sameVehicleRoutes
+          .filter(x => (x.deliveryTimestamp ?? new Date(x.deliveryDate).getTime()) <= rTripTs)
+          .sort((a, b) => (b.deliveryTimestamp ?? new Date(b.deliveryDate).getTime()) - (a.deliveryTimestamp ?? new Date(a.deliveryDate).getTime()))[0] ?? null;
+        const nextRoute = sameVehicleRoutes
+          .filter(x => (x.tripTimestamp ?? new Date(x.tripDate).getTime()) >= rDeliveryTs)
+          .sort((a, b) => (a.tripTimestamp ?? new Date(a.tripDate).getTime()) - (b.tripTimestamp ?? new Date(b.tripDate).getTime()))[0] ?? null;
+        const cycleRoutes = [prevRoute, r, nextRoute].filter((x): x is RouteMetric => x !== null);
+        const cycleFracht = cycleRoutes.reduce((s, x) => s + x.frachtEur, 0);
+        const cycleMargin = cycleRoutes.reduce((s, x) => s + x.marginEur, 0);
+        const cycleMarginPct = cycleFracht > 0 ? (cycleMargin / cycleFracht) * 100 : 0;
+
         const isLoss = r.marginPct < 0;
         const diagColor = isLoss
           ? { bg: "bg-red-50", border: "border-red-200", title: "text-red-700", text: "text-red-800", arrow: "text-red-500" }
@@ -1801,6 +1818,64 @@ export default function DyspozytorzyPage() {
                   ))}
                 </ul>
               </div>
+
+              {/* Kontekst — trasy sąsiednie tego pojazdu */}
+              {(prevRoute || nextRoute) && (
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">
+                    🔗 Kontekst — trasy tego samego pojazdu tuż przed/po
+                  </p>
+                  <div className="space-y-2">
+                    {prevRoute && (
+                      <div className="flex items-center justify-between gap-3 text-sm bg-white rounded-lg px-3 py-2 border border-slate-100">
+                        <div className="min-w-0">
+                          <div className="text-xs text-slate-400">← Poprzednia trasa</div>
+                          <div className="font-medium text-slate-700 truncate">{prevRoute.orderNr} · {prevRoute.originCountry}→{prevRoute.destCountry} · {prevRoute.client}</div>
+                        </div>
+                        <div className={`text-right font-bold shrink-0 ${marginColor(prevRoute.marginPct)}`}>
+                          {fmtPct(prevRoute.marginPct)}
+                          <div className="text-xs font-normal text-slate-500">{Math.round(prevRoute.marginEur)} €</div>
+                        </div>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between gap-3 text-sm bg-slate-100 rounded-lg px-3 py-2 border border-slate-200">
+                      <div className="min-w-0">
+                        <div className="text-xs text-slate-400">Ta trasa</div>
+                        <div className="font-medium text-slate-800 truncate">{r.orderNr} · {r.originCountry}→{r.destCountry} · {r.client}</div>
+                      </div>
+                      <div className={`text-right font-bold shrink-0 ${marginColor(r.marginPct)}`}>
+                        {fmtPct(r.marginPct)}
+                        <div className="text-xs font-normal text-slate-500">{Math.round(r.marginEur)} €</div>
+                      </div>
+                    </div>
+                    {nextRoute && (
+                      <div className="flex items-center justify-between gap-3 text-sm bg-white rounded-lg px-3 py-2 border border-slate-100">
+                        <div className="min-w-0">
+                          <div className="text-xs text-slate-400">Następna trasa →</div>
+                          <div className="font-medium text-slate-700 truncate">{nextRoute.orderNr} · {nextRoute.originCountry}→{nextRoute.destCountry} · {nextRoute.client}</div>
+                        </div>
+                        <div className={`text-right font-bold shrink-0 ${marginColor(nextRoute.marginPct)}`}>
+                          {fmtPct(nextRoute.marginPct)}
+                          <div className="text-xs font-normal text-slate-500">{Math.round(nextRoute.marginEur)} €</div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className={`mt-3 pt-3 border-t border-slate-200 flex items-center justify-between ${cycleMargin >= 0 ? "text-emerald-700" : "text-red-700"}`}>
+                    <span className="text-xs font-bold uppercase tracking-wide">Rentowność cyklu ({cycleRoutes.length} {cycleRoutes.length === 1 ? "trasa" : "trasy"})</span>
+                    <span className="font-bold">
+                      {cycleMargin >= 0 ? "+" : ""}{Math.round(cycleMargin)} € <span className="font-normal text-xs">({fmtPct(cycleMarginPct)})</span>
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-1">
+                    {!isLoss
+                      ? "Ta trasa nie jest stratna sama w sobie — powyżej dla porównania wynik całego cyklu z trasami sąsiednimi."
+                      : cycleMargin >= 0
+                        ? "Ta trasa sama w sobie wygląda źle, ale w całym cyklu tego pojazdu wynik jest dodatni — może to przejazd pozycjonujący przed/po opłacalnym kursie."
+                        : "Sąsiednie trasy nie kompensują straty — cały cykl tego pojazdu w tym okresie też wychodzi na minus."}
+                  </p>
+                </div>
+              )}
 
               {/* Cost breakdown bars */}
               <div>
