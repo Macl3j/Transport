@@ -206,6 +206,16 @@ export default function DyspozytorzyPage() {
   const [clientSortKey, setClientSortKey] = useState<"name" | "routes" | "km" | "ratePerKm" | "fracht" | "cost" | "margin" | "marginPct">("marginPct");
   const [clientSortDesc, setClientSortDesc] = useState(false);
 
+  // Sortowanie tabeli "Zleceniodawcy — {dyspozytor}" w drill-downie
+  const [dispClientSortKey, setDispClientSortKey] = useState<"name" | "routes" | "fracht" | "margin" | "marginPct" | "losses">("marginPct");
+  const [dispClientSortDesc, setDispClientSortDesc] = useState(false);
+  function toggleDispClientSort(key: typeof dispClientSortKey) {
+    if (dispClientSortKey === key) setDispClientSortDesc(d => !d);
+    else { setDispClientSortKey(key); setDispClientSortDesc(false); }
+  }
+  const DispClientSortIcon = ({ k }: { k: typeof dispClientSortKey }) =>
+    dispClientSortKey === k ? <span className="ml-1 text-blue-500">{dispClientSortDesc ? "↓" : "↑"}</span> : <span className="ml-1 text-slate-300">↕</span>;
+
   // Loss analysis modal
   const [analysisRoute, setAnalysisRoute] = useState<RouteMetric | null>(null);
 
@@ -957,17 +967,24 @@ export default function DyspozytorzyPage() {
               {/* Drill-down — selected dispatcher */}
               {selectedKpi && (() => {
                 // Ranking klientów per dyspozytor
-                const clientStats: Record<string, {routes:number;margin:number;losses:number;fracht:number}> = {};
+                const clientStats: Record<string, {routes:number;margin:number;losses:number;fracht:number;orderNrs:string[]}> = {};
                 for (const r of selectedKpi.routeList) {
-                  if (!clientStats[r.client]) clientStats[r.client] = {routes:0,margin:0,losses:0,fracht:0};
+                  if (!clientStats[r.client]) clientStats[r.client] = {routes:0,margin:0,losses:0,fracht:0,orderNrs:[]};
                   clientStats[r.client].routes++;
                   clientStats[r.client].margin += r.marginEur;
                   clientStats[r.client].fracht += r.frachtEur;
+                  clientStats[r.client].orderNrs.push(r.orderNr);
                   if (r.marginPct < 0) clientStats[r.client].losses++;
                 }
-                const clientRank = Object.entries(clientStats)
-                  .map(([name, s]) => ({name, ...s, marginPct: s.fracht>0?(s.margin/s.fracht)*100:0}))
-                  .sort((a,b) => a.marginPct - b.marginPct);
+                const clientRankUnsorted = Object.entries(clientStats)
+                  .map(([name, s]) => ({name, ...s, marginPct: s.fracht>0?(s.margin/s.fracht)*100:0}));
+                const clientRank = [...clientRankUnsorted].sort((a, b) => {
+                  const av = a[dispClientSortKey], bv = b[dispClientSortKey];
+                  const cmp = typeof av === "number" && typeof bv === "number"
+                    ? av - bv
+                    : String(av).localeCompare(String(bv), "pl");
+                  return dispClientSortDesc ? -cmp : cmp;
+                });
 
                 return (
                 <div className="space-y-3">
@@ -980,12 +997,20 @@ export default function DyspozytorzyPage() {
                       <table className="w-full text-sm">
                         <thead className="bg-slate-50 border-b border-slate-100">
                           <tr>
-                            <th className="text-left px-4 py-2 text-xs font-semibold text-slate-400 uppercase">Zleceniodawca</th>
-                            <th className="text-right px-3 py-2 text-xs font-semibold text-slate-400 uppercase">Trasy</th>
-                            <th className="text-right px-3 py-2 text-xs font-semibold text-slate-400 uppercase">Fracht</th>
-                            <th className="text-right px-3 py-2 text-xs font-semibold text-slate-400 uppercase">Marża EUR</th>
-                            <th className="text-right px-3 py-2 text-xs font-semibold text-slate-400 uppercase">Marża %</th>
-                            <th className="text-center px-3 py-2 text-xs font-semibold text-slate-400 uppercase">Straty</th>
+                            {([
+                              ["name", "Zleceniodawca", "text-left"],
+                              ["routes", "Trasy", "text-right"],
+                              ["fracht", "Fracht", "text-right"],
+                              ["margin", "Marża EUR", "text-right"],
+                              ["marginPct", "Marża %", "text-right"],
+                              ["losses", "Straty", "text-center"],
+                            ] as [typeof dispClientSortKey, string, string][]).map(([key, label, align]) => (
+                              <th key={key} onClick={() => toggleDispClientSort(key)}
+                                className={`${align} px-3 py-2 text-xs font-semibold text-slate-400 uppercase cursor-pointer select-none hover:text-slate-700`}>
+                                {label}<DispClientSortIcon k={key} />
+                              </th>
+                            ))}
+                            <th className="text-left px-3 py-2 text-xs font-semibold text-slate-400 uppercase">Nr zlecenia</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-50">
@@ -1000,6 +1025,9 @@ export default function DyspozytorzyPage() {
                                 {c.losses > 0
                                   ? <span className="text-xs bg-red-100 text-red-700 font-bold px-2 py-0.5 rounded-full">{c.losses} ✗</span>
                                   : <span className="text-xs text-emerald-500">✓</span>}
+                              </td>
+                              <td className="px-3 py-2 text-left text-[11px] font-mono text-slate-500 max-w-[220px] truncate" title={c.orderNrs.join(", ")}>
+                                {c.orderNrs.join(", ")}
                               </td>
                             </tr>
                           ))}
