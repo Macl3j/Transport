@@ -21,6 +21,9 @@ interface Contact {
   next_action_date: string | null;
   created_at: string;
   created_by: string | null;
+  address: string | null;
+  city: string | null;
+  address_source: string | null;
 }
 
 interface Profile {
@@ -421,6 +424,7 @@ function ContactDetail({
   const [editMode, setEditMode] = useState(false);
   const [form, setForm] = useState<Partial<Contact>>({});
   const [saving, setSaving] = useState(false);
+  const [lookingUpAddress, setLookingUpAddress] = useState(false);
 
   const [activities, setActivities] = useState<Activity[]>([]);
   const [actType, setActType] = useState<ActivityType>("call");
@@ -463,11 +467,36 @@ function ContactDetail({
       routes: form.routes || null,
       status: form.status,
       assigned_to: form.assigned_to || null,
+      address: form.address || null,
+      city: form.city || null,
+      address_source: form.address_source ?? null,
       updated_at: new Date().toISOString(),
     }).eq("id", contactId);
     setSaving(false);
     await load();
     onChanged();
+  }
+
+  async function lookupAddress() {
+    if (!form.nip?.trim()) { alert("Najpierw uzupełnij pole NIP"); return; }
+    setLookingUpAddress(true);
+    try {
+      const res = await fetch("/api/crm/nip-lookup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ nip: form.nip }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        alert(`Nie udało się pobrać adresu: ${json.error ?? "nieznany błąd"}`);
+        return;
+      }
+      setForm((f) => ({ ...f, address: json.address, city: json.city ?? f.city, address_source: "nip_lookup" }));
+    } catch (e) {
+      alert(`Błąd zapytania: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setLookingUpAddress(false);
+    }
   }
 
   async function addActivity() {
@@ -586,7 +615,16 @@ function ContactDetail({
             <div><label className="label">Nazwa firmy</label>
               <input className="input-field" value={form.company_name ?? ""} onChange={(e) => setForm((f) => ({ ...f, company_name: e.target.value }))} /></div>
             <div><label className="label">NIP</label>
-              <input className="input-field" value={form.nip ?? ""} onChange={(e) => setForm((f) => ({ ...f, nip: e.target.value }))} /></div>
+              <div className="flex gap-1.5">
+                <input className="input-field" value={form.nip ?? ""} onChange={(e) => setForm((f) => ({ ...f, nip: e.target.value }))} />
+                <button type="button" className="btn-secondary whitespace-nowrap text-xs px-2" disabled={lookingUpAddress} onClick={lookupAddress} title="Pobierz adres na podstawie NIP/VAT (biała lista MF dla PL, VIES dla zagranicznych)">
+                  {lookingUpAddress ? "Szukam…" : "📍 Adres z NIP"}
+                </button>
+              </div></div>
+            <div><label className="label">Adres</label>
+              <input className="input-field" value={form.address ?? ""} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value, address_source: "manual" }))} /></div>
+            <div><label className="label">Miasto</label>
+              <input className="input-field" value={form.city ?? ""} onChange={(e) => setForm((f) => ({ ...f, city: e.target.value, address_source: "manual" }))} /></div>
             <div><label className="label">Osoba kontaktowa</label>
               <input className="input-field" value={form.contact_person ?? ""} onChange={(e) => setForm((f) => ({ ...f, contact_person: e.target.value }))} /></div>
             <div><label className="label">Telefon</label>
@@ -613,6 +651,12 @@ function ContactDetail({
           {contact.phone && <div>📞 {contact.phone}</div>}
           {contact.email && <div>✉️ {contact.email}</div>}
           {contact.nip && <div>NIP: {contact.nip}</div>}
+          {(contact.address || contact.city) && (
+            <div>
+              📍 {[contact.address, contact.address ? null : contact.city].filter(Boolean).join(", ")}
+              {contact.address_source === "nip_lookup" && <span className="text-xs text-slate-400 ml-1">(z NIP)</span>}
+            </div>
+          )}
           {contact.routes && <div>🛣️ {contact.routes}</div>}
           {contact.assigned_to && <div>Handlowiec: {contact.assigned_to}</div>}
         </div>
