@@ -216,6 +216,16 @@ export default function DyspozytorzyPage() {
   const DispClientSortIcon = ({ k }: { k: typeof dispClientSortKey }) =>
     dispClientSortKey === k ? <span className="ml-1 text-blue-500">{dispClientSortDesc ? "↓" : "↑"}</span> : <span className="ml-1 text-slate-300">↕</span>;
 
+  // Sortowanie tabeli "Trasy — {dyspozytor}" w drill-downie
+  const [dispRouteSortKey, setDispRouteSortKey] = useState<"orderNr" | "client" | "vehicle" | "route" | "totalKm" | "frachtEur" | "totalCost" | "marginPct">("marginPct");
+  const [dispRouteSortDesc, setDispRouteSortDesc] = useState(false);
+  function toggleDispRouteSort(key: typeof dispRouteSortKey) {
+    if (dispRouteSortKey === key) setDispRouteSortDesc(d => !d);
+    else { setDispRouteSortKey(key); setDispRouteSortDesc(false); }
+  }
+  const DispRouteSortIcon = ({ k }: { k: typeof dispRouteSortKey }) =>
+    dispRouteSortKey === k ? <span className="ml-1 text-blue-500">{dispRouteSortDesc ? "↓" : "↑"}</span> : <span className="ml-1 text-slate-300">↕</span>;
+
   // Loss analysis modal
   const [analysisRoute, setAnalysisRoute] = useState<RouteMetric | null>(null);
 
@@ -1045,19 +1055,32 @@ export default function DyspozytorzyPage() {
                   <table className="w-full text-sm">
                     <thead className="bg-slate-50 border-b">
                       <tr>
-                        <th className="text-left px-4 py-2 text-xs font-semibold text-slate-500 uppercase">Zlecenie</th>
-                        <th className="text-left px-4 py-2 text-xs font-semibold text-slate-500 uppercase">Zleceniodawca</th>
-                        <th className="text-left px-4 py-2 text-xs font-semibold text-slate-500 uppercase">Pojazd</th>
-                        <th className="text-left px-4 py-2 text-xs font-semibold text-slate-500 uppercase">Trasa</th>
-                        <th className="text-right px-4 py-2 text-xs font-semibold text-slate-500 uppercase">km(L+P)/d</th>
-                        <th className="text-right px-4 py-2 text-xs font-semibold text-slate-500 uppercase">Fracht</th>
-                        <th className="text-right px-4 py-2 text-xs font-semibold text-slate-500 uppercase">Koszty</th>
-                        <th className="text-right px-4 py-2 text-xs font-semibold text-slate-500 uppercase">Marża</th>
+                        {([
+                          ["orderNr", "Zlecenie", "text-left"],
+                          ["client", "Zleceniodawca", "text-left"],
+                          ["vehicle", "Pojazd", "text-left"],
+                          ["route", "Trasa", "text-left"],
+                          ["totalKm", "km(L+P)/d", "text-right"],
+                          ["frachtEur", "Fracht", "text-right"],
+                          ["totalCost", "Koszty", "text-right"],
+                          ["marginPct", "Marża", "text-right"],
+                        ] as [typeof dispRouteSortKey, string, string][]).map(([key, label, align]) => (
+                          <th key={key} onClick={() => toggleDispRouteSort(key)}
+                            className={`${align} px-4 py-2 text-xs font-semibold text-slate-500 uppercase cursor-pointer select-none hover:text-slate-700`}>
+                            {label}<DispRouteSortIcon k={key} />
+                          </th>
+                        ))}
                         <th className="text-center px-4 py-2 text-xs font-semibold text-slate-500 uppercase">Status</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {selectedKpi.routeList.sort((a,b)=>a.marginPct-b.marginPct).map(r => (
+                      {[...selectedKpi.routeList].sort((a, b) => {
+                        let av: string | number, bv: string | number;
+                        if (dispRouteSortKey === "route") { av = `${a.originCountry}${a.destCountry}`; bv = `${b.originCountry}${b.destCountry}`; }
+                        else { av = a[dispRouteSortKey]; bv = b[dispRouteSortKey]; }
+                        const cmp = typeof av === "number" && typeof bv === "number" ? av - bv : String(av).localeCompare(String(bv), "pl");
+                        return dispRouteSortDesc ? -cmp : cmp;
+                      }).map(r => (
                         <tr key={r.orderNr}
                           onClick={() => setAnalysisRoute(r)}
                           className={`cursor-pointer hover:bg-blue-50/30 ${r.noFreightData?"bg-slate-50/60":r.marginPct<0?"bg-red-50/30":""}`}>
