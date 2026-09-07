@@ -454,31 +454,30 @@ export default function FleetPage() {
         <table className="w-full text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
-              <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500 uppercase w-12">LP</th>
+              <th className="text-center px-2 py-2.5 text-xs font-semibold text-slate-500 uppercase w-10">LP</th>
               {([
                 ["reg", "Rejestracja"],
                 ["brand", "Marka / Model"],
                 ["year_produced", "Rok"],
-                ["odometer_km", "Licznik (km)"],
+                ["odometer_km", "Przebieg"],
                 ["avg_fuel_l100", "Spalanie"],
-                ["leasing_eur_mo", "Leasing netto EUR/mc"],
+                ["leasing_eur_mo", "Leasing €/mc"],
               ] as [SortKey, string][]).map(([key, label]) => (
                 <th key={key}
                   onClick={() => toggleSort(key)}
-                  className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide cursor-pointer hover:text-slate-800 select-none">
+                  className="text-left px-2.5 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wide cursor-pointer hover:text-slate-800 select-none whitespace-nowrap">
                   {label}<SortIcon k={key} />
                 </th>
               ))}
-              <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Typ</th>
-              <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Ubezp. EUR/mc</th>
-              <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Umowa serwisowa</th>
-              <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Status</th>
-              <th className="text-center px-4 py-3 text-xs font-semibold text-slate-400 uppercase w-20 sticky right-0 bg-slate-50 border-l border-slate-200"></th>
+              <th className="text-center px-2.5 py-2.5 text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">Typ</th>
+              <th className="text-center px-2.5 py-2.5 text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">Ubezp. / serwis</th>
+              <th className="text-center px-2.5 py-2.5 text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">Status</th>
+              <th className="text-center px-2 py-2.5 text-xs font-semibold text-slate-400 uppercase w-16 sticky right-0 bg-slate-50 border-l border-slate-200"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {filtered.length === 0 ? (
-              <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-400 text-sm">Brak pojazdów spełniających kryteria</td></tr>
+              <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400 text-sm">Brak pojazdów spełniających kryteria</td></tr>
             ) : filtered.map((v, i) => {
               const rowBg = !v.is_active ? "bg-slate-50" : (odoColor(v.odometer_km) || "bg-white");
               return (
@@ -487,8 +486,8 @@ export default function FleetPage() {
                   ? "opacity-50 bg-slate-50 hover:bg-slate-100"
                   : `hover:bg-slate-50 ${odoColor(v.odometer_km)}`
               }`}>
-                <td className="px-4 py-3 text-center text-slate-400 text-xs font-mono">{i + 1}</td>
-                <td className="px-4 py-3 font-mono font-semibold text-slate-800">
+                <td className="px-2 py-2.5 text-center text-slate-400 text-xs font-mono">{i + 1}</td>
+                <td className="px-2.5 py-2.5 font-mono font-semibold text-slate-800 whitespace-nowrap">
                   {v.reg}
                   {!v.is_active && (
                     <span className={`ml-2 px-1.5 py-0.5 text-[10px] font-bold rounded uppercase tracking-wide ${
@@ -498,42 +497,42 @@ export default function FleetPage() {
                     </span>
                   )}
                 </td>
-                <td className="px-4 py-3">
+                <td className="px-2.5 py-2.5">
                   <div className="font-medium text-slate-800">{v.brand ?? "—"}</div>
                   <div className="text-xs text-slate-400">{v.model ?? ""}</div>
                 </td>
-                <td className="px-4 py-3">
+                <td className="px-2.5 py-2.5 whitespace-nowrap">
                   <span className="text-slate-700">{v.year_produced ?? "—"}</span>
                   {euroClass(v.year_produced)}
                 </td>
-                <td className="px-4 py-3">
+                <td className="px-2.5 py-2.5 whitespace-nowrap">
                   <span className={`font-medium ${(v.odometer_km ?? 0) >= 900_000 ? "text-red-700" : (v.odometer_km ?? 0) >= 700_000 ? "text-amber-700" : "text-slate-700"}`}>
                     {v.odometer_km ? fmt(v.odometer_km) : "—"}
                   </span>
                   {odoBadge(v.odometer_km)}
                 </td>
-                <td className="px-4 py-3">
+                <td className="px-2.5 py-2.5 whitespace-nowrap">
                   {v.avg_fuel_l100
                     ? <span className={`font-medium ${v.avg_fuel_l100 > 32 ? "text-red-600" : v.avg_fuel_l100 > 29 ? "text-amber-600" : "text-emerald-600"}`}>
                         {v.avg_fuel_l100} l/100
                       </span>
                     : <span className="text-slate-400">—</span>}
                 </td>
-                <td className="px-4 py-3">
+                <td className="px-2.5 py-2.5 whitespace-nowrap">
                   {v.leasing_eur_mo && v.leasing_eur_mo > 50 ? (
                     <div>
-                      <span className="font-medium text-slate-700">{fmt(Math.round(v.leasing_eur_mo))} EUR</span>
+                      <span className="font-medium text-slate-700">{fmt(Math.round(v.leasing_eur_mo))} €</span>
                       {v.leasing_brutto_eur_mo && <div className="text-xs text-slate-400">brutto: {fmt(Math.round(v.leasing_brutto_eur_mo))}</div>}
                     </div>
                   ) : v.leasing_brutto_eur_mo && v.leasing_brutto_eur_mo > 50 ? (
                     // Wypełnione tylko brutto — pokaż netto wyliczone (brutto / 1.23)
                     <div>
-                      <span className="font-medium text-slate-700">{fmt(Math.round(v.leasing_brutto_eur_mo / 1.23))} EUR</span>
-                      <div className="text-xs text-slate-400">brutto: {fmt(Math.round(v.leasing_brutto_eur_mo))} (netto wyliczone)</div>
+                      <span className="font-medium text-slate-700">{fmt(Math.round(v.leasing_brutto_eur_mo / 1.23))} €</span>
+                      <div className="text-xs text-slate-400">brutto: {fmt(Math.round(v.leasing_brutto_eur_mo))} (wyliczone)</div>
                     </div>
                   ) : <span className="text-slate-400 text-xs">brak / spłacony</span>}
                 </td>
-                <td className="px-4 py-3 text-center">
+                <td className="px-2.5 py-2.5 text-center whitespace-nowrap">
                   <span className={`px-2 py-0.5 text-xs font-medium rounded ${
                     v.vehicle_type === "naczepa" ? "bg-indigo-50 text-indigo-700"
                     : v.vehicle_type === "podwykonawca" ? "bg-amber-50 text-amber-700"
@@ -546,20 +545,21 @@ export default function FleetPage() {
                       : "—"}
                   </span>
                 </td>
-                <td className="px-4 py-3 text-center">
+                {/* Ubezpieczenie + umowa serwisowa połączone w jedną kolumnę */}
+                <td className="px-2.5 py-2.5 text-center whitespace-nowrap">
                   {v.insurance_eur_mo && v.insurance_eur_mo > 0
-                    ? <span className="text-slate-700 text-sm">{fmt(Math.round(v.insurance_eur_mo))}</span>
+                    ? <span className="text-slate-700 text-sm">{fmt(Math.round(v.insurance_eur_mo))} €</span>
                     : <span className="text-slate-400 text-xs">—</span>}
-                </td>
-                <td className="px-4 py-3 text-center">
-                  <span className={`px-2 py-0.5 text-xs font-medium rounded ${
-                    v.service_contract ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"
-                  }`}>
-                    {v.service_contract ? "Tak" : "Nie"}
-                  </span>
+                  <div>
+                    <span className={`inline-block mt-0.5 px-1.5 py-0.5 text-[10px] font-medium rounded ${
+                      v.service_contract ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-400"
+                    }`}>
+                      {v.service_contract ? "serwis: TAK" : "serwis: nie"}
+                    </span>
+                  </div>
                 </td>
                 {/* Toggle active/inactive */}
-                <td className="px-4 py-3 text-center">
+                <td className="px-2.5 py-2.5 text-center whitespace-nowrap">
                   <button
                     onClick={() => toggleActive(v)}
                     disabled={togglingId === v.id}
@@ -573,9 +573,9 @@ export default function FleetPage() {
                     {togglingId === v.id ? "…" : v.is_active ? "✓ Aktywny" : "Wyłączony"}
                   </button>
                 </td>
-                <td className={`px-4 py-3 text-center sticky right-0 border-l border-slate-200 ${rowBg} group-hover:bg-slate-50`}>
+                <td className={`px-2 py-2.5 text-center sticky right-0 border-l border-slate-200 ${rowBg} group-hover:bg-slate-50`}>
                   <button onClick={() => { setSaveError(null); setEditVehicle({...v}); }}
-                    className="px-3 py-1 text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg font-medium transition-colors">
+                    className="px-2.5 py-1 text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg font-medium transition-colors">
                     Edytuj
                   </button>
                 </td>
