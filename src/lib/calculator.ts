@@ -246,20 +246,21 @@ export function calculateRoute(input: RouteInput, settings?: CalcSettings): Cost
     ?? (isNewVehicle ? FLEET.leasingNewEurMo : FLEET.leasingOldEurMo);
   const leasingCost = s.leasingMethod === 'per_dobe'
     ? (leasingMo / 30) * routeDays * perDobeShare
-    : (leasingMo / fleetAvgKmMo) * distanceKm;
+    // totalKm (nie distanceKm) — pusty przejazd też zużywa leasingowany pojazd
+    : (leasingMo / fleetAvgKmMo) * totalKm;
 
   // 7b. LEASING NACZEPY
   const trailerLeasingMo = input.trailerLeasingEurMo
     ?? (isNewVehicle ? FLEET.trailerLeasingNewEurMo : FLEET.trailerLeasingOldEurMo);
   const trailerLeasingCost = s.trailerLeasingMethod === 'per_dobe'
     ? (trailerLeasingMo / 30) * routeDays * perDobeShare
-    : (trailerLeasingMo / fleetAvgKmMo) * distanceKm;
+    : (trailerLeasingMo / fleetAvgKmMo) * totalKm;
 
   // 8. INSURANCE (OC+AC)
   const insuranceMo = input.insuranceEurMo ?? FLEET.insuranceEurMo;
   const insuranceCost = s.insuranceMethod === 'per_dobe'
     ? (insuranceMo / 30) * routeDays * perDobeShare
-    : (insuranceMo / fleetAvgKmMo) * distanceKm;
+    : (insuranceMo / fleetAvgKmMo) * totalKm;
 
   // ─── Totals ───────────────────────────────────────────────
   const total = fuelCost + adblue + idle + tollCost + driverCost + serviceCost + leasingCost + trailerLeasingCost + insuranceCost;

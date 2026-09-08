@@ -4,6 +4,7 @@ import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 import { profitabilityLabel, type CostBreakdown as CB } from "@/lib/calculator";
+import { useSettings } from "@/lib/settings-context";
 
 interface Props {
   result: CB;
@@ -35,7 +36,14 @@ const fmtEur = (n: number) => `${fmt(n)} EUR`;
 export default function CostBreakdown({
   result, freightEur, distanceKm, onSave, saving, saved, saveError,
 }: Props) {
-  const { label, color } = profitabilityLabel(result.marginPct);
+  const { settings } = useSettings();
+  const hasFreight = freightEur > 0;
+  // Bez frachtu marginPct z silnika jest sztucznie wyzerowane (ochrona przed
+  // dzieleniem przez 0) — bez tego "0.0%" trafiało do profitabilityLabel i
+  // pokazywało "Próg rentowności" mimo realnej straty równej całemu kosztowi.
+  const { label, color } = hasFreight
+    ? profitabilityLabel(result.marginPct, settings.marginGoodPct, settings.marginLowPct)
+    : { label: "STRATA", color: "red" };
 
   const costItems = [
     { name: "Paliwo ON",      value: result.fuel,           icon: "⛽" },
@@ -67,7 +75,7 @@ export default function CostBreakdown({
             {result.marginEur >= 0 ? "+" : ""}{fmtEur(result.marginEur)}
           </p>
           <p className="text-sm mt-1 opacity-80">
-            marża: {result.marginPct.toFixed(1)}%
+            marża: {hasFreight ? `${result.marginPct.toFixed(1)}%` : "brak frachtu"}
             &nbsp;·&nbsp;
             min. fracht: {fmtEur(result.minProfitableFreight)}
           </p>

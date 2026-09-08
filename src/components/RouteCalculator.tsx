@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   calculateRoute,
   COUNTRY_OPTIONS,
@@ -27,7 +27,7 @@ const TRANSIT_PRESETS: Record<string, string[]> = {
 };
 
 export default function RouteCalculator() {
-  const { settings } = useSettings();
+  const { settings, loading: settingsLoading } = useSettings();
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [form, setForm] = useState({
     originCountry: "PL",
@@ -48,6 +48,17 @@ export default function RouteCalculator() {
 
   const [trailers, setTrailers] = useState<Vehicle[]>([]);
   const [selectedTrailerReg, setSelectedTrailerReg] = useState("");
+
+  // Formularz startuje z zaszytym fuelPriceEurL=1.25 zanim ustawienia się
+  // wczytają z Supabase — bez tej synchronizacji kalkulator po cichu liczył
+  // na starej cenie ON nawet gdy w /konfiguracja ustawiono inną (np. 1.30).
+  const fuelPriceSynced = useRef(false);
+  useEffect(() => {
+    if (!settingsLoading && !fuelPriceSynced.current) {
+      fuelPriceSynced.current = true;
+      setForm(prev => ({ ...prev, fuelPriceEurL: settings.fuelPriceEurL }));
+    }
+  }, [settingsLoading, settings.fuelPriceEurL]);
 
   useEffect(() => {
     supabase
