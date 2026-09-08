@@ -4,8 +4,13 @@ import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import type { AuthSession as Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
+import { useFleetReach, type ReachPeriod } from "@/lib/useFleetReach";
 
 const CrmMap = dynamic(() => import("@/components/CrmMap"), { ssr: false });
+
+const REACH_PERIOD_LABELS: Record<ReachPeriod, string> = {
+  "3m": "3 mies.", "6m": "6 mies.", "12m": "12 mies.", all: "cała historia",
+};
 
 // ── Typy ─────────────────────────────────────────────────────
 type ContactStatus = "prospekt" | "w_negocjacji" | "aktywny" | "stracony";
@@ -223,6 +228,7 @@ function CrmDashboard({ session }: { session: Session }) {
   const [showNew, setShowNew] = useState(false);
   const [newForm, setNewForm] = useState({ company_name: "", nip: "", contact_person: "", phone: "", email: "", routes: "" });
   const [saving, setSaving] = useState(false);
+  const fleetReach = useFleetReach(session);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -443,7 +449,44 @@ function CrmDashboard({ session }: { session: Session }) {
         /* Mapa + panel szczegółów */
         <div className="flex gap-5 flex-wrap items-start">
           <div className="flex-1 min-w-[340px] space-y-2">
-            <CrmMap contacts={filtered} onSelect={setSelectedId} />
+            {/* Zasięg floty */}
+            <div className="card p-3 flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-2 text-sm font-medium text-slate-700 cursor-pointer">
+                <input type="checkbox" checked={fleetReach.enabled} onChange={fleetReach.toggle} />
+                🚚 Pokaż zasięg floty (miejsca załadunku/rozładunku)
+              </label>
+              {fleetReach.enabled && (
+                <>
+                  <select
+                    className="input-field bg-white w-auto text-sm py-1"
+                    value={fleetReach.period}
+                    onChange={(e) => fleetReach.setPeriod(e.target.value as ReachPeriod)}
+                  >
+                    {(Object.keys(REACH_PERIOD_LABELS) as ReachPeriod[]).map((p) => (
+                      <option key={p} value={p}>{REACH_PERIOD_LABELS[p]}</option>
+                    ))}
+                  </select>
+                  {fleetReach.loading ? (
+                    <span className="text-xs text-slate-400">Wczytuję historię tras…</span>
+                  ) : (
+                    <span className="text-xs text-slate-400">
+                      {fleetReach.geocodedCities} z {fleetReach.totalUniqueCities} miast ze współrzędnymi
+                    </span>
+                  )}
+                  <button
+                    className="btn-secondary text-xs py-1 px-2 ml-auto"
+                    disabled={fleetReach.refreshing || fleetReach.loading}
+                    onClick={fleetReach.refreshCoverage}
+                  >
+                    {fleetReach.refreshing
+                      ? `Geokoduję… ${fleetReach.refreshProgress?.done ?? 0}/${fleetReach.refreshProgress?.total ?? 0}`
+                      : "🔄 Zaktualizuj zasięg"}
+                  </button>
+                </>
+              )}
+            </div>
+
+            <CrmMap contacts={filtered} onSelect={setSelectedId} reachPoints={fleetReach.reachPoints} />
             <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 px-1">
               {(Object.keys(STATUS_LABELS) as ContactStatus[]).map((s) => (
                 <span key={s} className="flex items-center gap-1.5">
@@ -451,6 +494,12 @@ function CrmDashboard({ session }: { session: Session }) {
                   {STATUS_LABELS[s]}
                 </span>
               ))}
+              {fleetReach.enabled && fleetReach.reachPoints.length > 0 && (
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full bg-blue-600 opacity-40" />
+                  zasięg floty ({fleetReach.reachPoints.length} miast)
+                </span>
+              )}
               <span className="ml-auto">
                 {filtered.filter((c) => c.lat != null && c.lng != null).length} z {filtered.length} kontaktów na mapie
                 {filtered.some((c) => c.lat == null) && " (reszta nie ma jeszcze adresu lub współrzędnych)"}
