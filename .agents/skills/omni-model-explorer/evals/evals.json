@@ -1,0 +1,57 @@
+{
+  "version": "1",
+  "skill_name": "omni-model-explorer",
+  "defaults": {
+    "timeout_sec": 600,
+    "judge_model": "claude-sonnet-4-6"
+  },
+  "cases": [
+    {
+      "id": "1",
+      "question": "What data do we have available to query in Omni? Give me an overview of our topics and what they cover.",
+      "ground_truth": "Models listed, SHARED model identified, topics listed with descriptions. Each topic's base view and purpose summarized.",
+      "expected_behavior": [
+        "The agent calls omni models list and identifies the SHARED model (not the SCHEMA model) as the one to explore",
+        "The agent calls omni models list-topics with the SHARED model ID to get the topic list",
+        "The agent summarizes each topic by name and purpose \u2014 not just by listing raw API response fields"
+      ],
+      "expected_skill": "omni-model-explorer"
+    },
+    {
+      "id": "2",
+      "question": "I want to query revenue data. What fields and measures are available, and how do the relevant tables join together?",
+      "ground_truth": "Most relevant topic inspected. Available revenue measures identified by name and aggregate type. Join relationships between views explained.",
+      "expected_behavior": [
+        "The agent calls omni models get-topic to inspect the relevant topic in detail \u2014 not just list topics",
+        "The agent identifies specific measure names (e.g., total_revenue) and their aggregate types from the topic response",
+        "The agent describes the join relationships from the topic's relationships[] \u2014 which views join to which, and on what condition"
+      ],
+      "expected_skill": "omni-model-explorer"
+    },
+    {
+      "id": "3",
+      "question": "I'm about to remove the 'sale_price' field from the model. What will break?",
+      "ground_truth": "Field impact analysis run: branch created with field removed, content validator run against the branch, YAML searched for references. Full blast radius reported.",
+      "expected_behavior": [
+        "The agent creates a model branch and removes the field there, or verifies that an existing branch actually has the field removed \u2014 it does not touch the production model to assess impact",
+        "The agent reads branch YAML or validates the branch setup before treating content-validator output as deletion impact",
+        "The agent runs omni models content-validator-get --branch-id to find broken dashboards and tiles",
+        "The agent also searches the model YAML for references to sale_price in other views, topics, or calculated fields",
+        "The agent reports both broken content (from the validator) and model references (from YAML search) before recommending any action"
+      ],
+      "expected_skill": "omni-model-explorer"
+    },
+    {
+      "id": "4",
+      "question": "Show me the AI context configured on the order_items topic \u2014 I want to understand what Blobby knows about this data.",
+      "ground_truth": "Topic inspected with get-topic. ai_context, sample_queries, and ai_fields values returned and summarized clearly.",
+      "expected_behavior": [
+        "The agent calls omni models get-topic to retrieve the topic detail \u2014 it does not guess or hallucinate the ai_context content",
+        "The agent reports the actual ai_context text from the API response",
+        "The agent reports configured ai_fields or AI field-selection values from the topic response or topic YAML",
+        "If sample_queries are present in the topic, the agent includes their names, prompts, and relevant query fields in the summary"
+      ],
+      "expected_skill": "omni-model-explorer"
+    }
+  ]
+}
