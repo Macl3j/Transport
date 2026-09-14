@@ -189,6 +189,7 @@ export default function DyspozytorzyPage() {
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<"config" | "dashboard" | "routes" | "clients" | "monthly" | "idle">("dashboard");
   const [selectedDispatcher, setSelectedDispatcher] = useState<string | null>(null);
+  const [showUnassigned, setShowUnassigned] = useState(false);
   const [weekLabel, setWeekLabel] = useState("");
   const [eurRate, setEurRate] = useState(4.27);
   const [fuelPrice, setFuelPrice] = useState(1.25);
@@ -962,17 +963,72 @@ export default function DyspozytorzyPage() {
               </div>
 
               {/* Unassigned warning */}
-              {kpiData.find(d=>d.id==="__unassigned__") && (
-                <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-3">
-                  <span className="text-amber-600 text-xl">⚠</span>
-                  <div>
-                    <p className="font-semibold text-amber-800">
-                      {kpiData.find(d=>d.id==="__unassigned__")!.routes} tras bez przypisanego dyspozytora
-                    </p>
-                    <p className="text-sm text-amber-700">Przypisz pojazdy do dyspozytorów w zakładce Konfiguracja</p>
-                  </div>
+              {kpiData.find(d=>d.id==="__unassigned__") && (() => {
+                const unassignedKpi = kpiData.find(d=>d.id==="__unassigned__")!;
+                // Grupowanie po pojeździe — to jest jednostka, którą trzeba przypisać w Konfiguracji
+                const byVehicle: Record<string, RouteMetric[]> = {};
+                for (const r of unassignedKpi.routeList) {
+                  (byVehicle[r.vehicle || "(brak nr rej.)"] ??= []).push(r);
+                }
+                const vehicleRows = Object.entries(byVehicle)
+                  .map(([vehicle, routes]) => ({
+                    vehicle, routes,
+                    fracht: routes.reduce((s,r)=>s+r.frachtEur,0),
+                  }))
+                  .sort((a,b) => b.routes.length - a.routes.length);
+
+                return (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setShowUnassigned(v => !v)}
+                    className="w-full p-4 flex items-start gap-3 text-left hover:bg-amber-100/60 transition-colors"
+                  >
+                    <span className="text-amber-600 text-xl">⚠</span>
+                    <div className="flex-1">
+                      <p className="font-semibold text-amber-800">
+                        {unassignedKpi.routes} tras bez przypisanego dyspozytora
+                        <span className="font-normal text-amber-700"> · {vehicleRows.length} pojazdów</span>
+                      </p>
+                      <p className="text-sm text-amber-700">Przypisz pojazdy do dyspozytorów w zakładce Konfiguracja</p>
+                    </div>
+                    <span className={`text-amber-500 transition-transform ${showUnassigned ? "rotate-180" : ""}`}>▾</span>
+                  </button>
+
+                  {showUnassigned && (
+                    <div className="border-t border-amber-200 bg-white px-4 py-3 max-h-96 overflow-y-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-left text-slate-400 uppercase tracking-wide">
+                            <th className="py-1.5 pr-3">Pojazd</th>
+                            <th className="py-1.5 pr-3 text-right">Tras</th>
+                            <th className="py-1.5 pr-3 text-right">Fracht</th>
+                            <th className="py-1.5">Zlecenia (klient · trasa · data)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {vehicleRows.map(v => (
+                            <tr key={v.vehicle} className="border-t border-slate-100 align-top">
+                              <td className="py-1.5 pr-3 font-mono font-semibold text-slate-700 whitespace-nowrap">{v.vehicle}</td>
+                              <td className="py-1.5 pr-3 text-right text-slate-600">{v.routes.length}</td>
+                              <td className="py-1.5 pr-3 text-right text-slate-600 whitespace-nowrap">{fmtEur(v.fracht)}</td>
+                              <td className="py-1.5 text-slate-500">
+                                {v.routes.map(r => (
+                                  <div key={r.orderNr} className="truncate">
+                                    <span className="font-mono text-slate-400">{r.orderNr}</span>
+                                    {" · "}{r.client}{" · "}{r.originCountry}→{r.destCountry}{" · "}{r.tripDate}
+                                  </div>
+                                ))}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
-              )}
+                );
+              })()}
 
               {/* Drill-down — selected dispatcher */}
               {selectedKpi && (() => {
