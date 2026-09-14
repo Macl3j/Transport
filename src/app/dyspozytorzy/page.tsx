@@ -28,6 +28,7 @@ interface Vehicle {
   service_cost_km: number | null;
   service_contract: boolean | null;
   avg_km_month: number | null;
+  is_active: boolean;
 }
 
 interface CostBreakdownDetail {
@@ -250,7 +251,10 @@ export default function DyspozytorzyPage() {
     setLoading(true);
     const [{ data: disps }, { data: vehs }] = await Promise.all([
       supabase.from("dispatchers").select("*").eq("is_active", true).order("name"),
-      supabase.from("vehicles").select("reg,brand,model,vehicle_type,dispatcher_id,avg_fuel_l100,year_produced,leasing_eur_mo,insurance_eur_mo,service_cost_km,service_contract,avg_km_month").eq("is_active", true).order("vehicle_type,reg"),
+      // Uwaga: BEZ filtra is_active=true — wyłączenie pojazdu z eksploatacji nie może
+      // wymazywać jego przypisania do dyspozytora, bo historyczne trasy tego pojazdu
+      // musimy dalej móc analizować per dyspozytor (patrz dispMap niżej).
+      supabase.from("vehicles").select("reg,brand,model,vehicle_type,dispatcher_id,avg_fuel_l100,year_produced,leasing_eur_mo,insurance_eur_mo,service_cost_km,service_contract,avg_km_month,is_active").order("vehicle_type,reg"),
     ]);
     setDispatchers(disps ?? []);
     setVehicles(vehs ?? []);
@@ -525,7 +529,9 @@ export default function DyspozytorzyPage() {
     };
 
     const kpis: DispatcherKPI[] = dispatchers.map(d => {
-      const vehs = vehicles.filter(v => v.dispatcher_id === d.id);
+      // Tylko AKTYWNE pojazdy w liczniku "aktualnie przypisane" (operacyjny stan floty) —
+      // historyczne trasy wycofanego pojazdu i tak trafiają do routeList przez dispMap.
+      const vehs = vehicles.filter(v => v.is_active && v.dispatcher_id === d.id);
       return buildKpi(d, grouped[d.id] ?? [], vehs);
     });
 
@@ -789,7 +795,7 @@ export default function DyspozytorzyPage() {
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Dyspozytorzy — Rozliczenia tygodniowe</h1>
-          <p className="text-slate-500 text-sm mt-1">{dispatchers.length} dyspozytorów · {vehicles.filter(v=>v.dispatcher_id).length}/{vehicles.length} pojazdów przypisanych</p>
+          <p className="text-slate-500 text-sm mt-1">{dispatchers.length} dyspozytorów · {vehicles.filter(v=>v.is_active&&v.dispatcher_id).length}/{vehicles.filter(v=>v.is_active).length} pojazdów przypisanych</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <div className="flex items-center gap-2 text-xs text-slate-500">
@@ -1733,7 +1739,7 @@ export default function DyspozytorzyPage() {
             <div className="px-4 py-3 bg-slate-50 border-b flex items-center justify-between flex-wrap gap-2">
               <div>
                 <h3 className="font-bold text-slate-800">Przypisanie pojazdów do dyspozytorów</h3>
-                <p className="text-xs text-slate-500 mt-0.5">{vehicles.filter(v=>configTypeFilter==="all"||v.vehicle_type===configTypeFilter).length} pojazdów</p>
+                <p className="text-xs text-slate-500 mt-0.5">{vehicles.filter(v=>v.is_active&&(configTypeFilter==="all"||v.vehicle_type===configTypeFilter)).length} pojazdów</p>
               </div>
               <div className="flex gap-1">
                 {(["all","ciągnik","naczepa"] as const).map(t => (
@@ -1756,7 +1762,7 @@ export default function DyspozytorzyPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 max-h-[500px] overflow-y-auto">
-                {vehicles.filter(v => configTypeFilter==="all" || v.vehicle_type===configTypeFilter).map(v => (
+                {vehicles.filter(v => v.is_active && (configTypeFilter==="all" || v.vehicle_type===configTypeFilter)).map(v => (
                   <tr key={v.reg} className="hover:bg-slate-50">
                     <td className="px-4 py-2 font-mono font-semibold text-slate-800">{v.reg}</td>
                     <td className="px-4 py-2">
