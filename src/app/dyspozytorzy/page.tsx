@@ -303,16 +303,31 @@ export default function DyspozytorzyPage() {
     const vehMap: Record<string, Vehicle> = {};
     for (const v of vehicles) vehMap[v.reg] = v;
 
-    // Trailer leasing map: naczepa_reg → leasing EUR/mo
+    // Trailer leasing map: naczepa_reg → leasing EUR/mo (tylko AKTYWNE naczepy —
+    // wycofane mogą mieć raty bliskie końca umowy, nie reprezentują bieżącego kosztu)
     const trailerLeasingMap: Record<string, number> = {};
     for (const v of vehicles) {
-      if (v.vehicle_type === "naczepa" && v.reg && v.leasing_eur_mo)
+      if (v.vehicle_type === "naczepa" && v.reg && v.leasing_eur_mo && v.is_active)
         trailerLeasingMap[v.reg] = Number(v.leasing_eur_mo);
     }
     const allTrailerLeasings = Object.values(trailerLeasingMap);
     const fleetAvgTrailerLeasing = allTrailerLeasings.length
       ? allTrailerLeasings.reduce((a, b) => a + b, 0) / allTrailerLeasings.length
       : undefined;
+
+    // Żywe średnie floty dla CIĄGNIKÓW (tylko aktywne) — używane jako fallback zamiast
+    // zaszytych na sztywno stałych FLEET.leasingOldEurMo/leasingNewEurMo/avgFuelL100/
+    // insuranceEurMo w calculator.ts, które okazały się mocno nieaktualne (np. realna
+    // śr. leasingu ciągnika to ~1940 EUR/mies., a stała FLEET.leasingNewEurMo to 733 EUR —
+    // przewoźnicy spoza Floty dostawaliby drastycznie zaniżony koszt leasingu w kalkulacji).
+    const activeCiagniki = vehicles.filter(v => v.vehicle_type === "ciągnik" && v.is_active);
+    const fleetAvgList = (field: "avg_fuel_l100" | "leasing_eur_mo" | "insurance_eur_mo") => {
+      const vals = activeCiagniki.map(v => v[field]).filter((n): n is number => n != null && n > 0);
+      return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : undefined;
+    };
+    const fleetAvgFuelL100   = fleetAvgList("avg_fuel_l100");
+    const fleetAvgLeasing    = fleetAvgList("leasing_eur_mo");
+    const fleetAvgInsurance  = fleetAvgList("insurance_eur_mo");
 
     const dispMap: Record<string, string> = {};
     for (const v of vehicles) {
@@ -444,11 +459,11 @@ export default function DyspozytorzyPage() {
         originCountry, destCountry, distanceKm, emptyKm,
         fuelPriceEurL: fuelPrice,
         transitCountries: [originCountry, destCountry],
-        avgFuelL100: vData?.avg_fuel_l100 ?? FLEET.avgFuelL100,
+        avgFuelL100: vData?.avg_fuel_l100 ?? fleetAvgFuelL100 ?? FLEET.avgFuelL100,
         vehicleYearProduced: vData?.year_produced ?? undefined,
-        leasingEurMo: vData?.leasing_eur_mo ?? undefined,
+        leasingEurMo: vData?.leasing_eur_mo ?? fleetAvgLeasing,
         trailerLeasingEurMo,
-        insuranceEurMo: vData?.insurance_eur_mo ?? undefined,
+        insuranceEurMo: vData?.insurance_eur_mo ?? fleetAvgInsurance,
         serviceCostKmOverride: vData?.service_cost_km ?? undefined,
         serviceContract: vData?.service_contract ?? false,
         routeDays,
