@@ -1837,7 +1837,7 @@ export default function DyspozytorzyPage() {
         if (bd.driver / r.frachtEur > 0.35)
           diagnoses.push(`Koszt kierowcy ${(bd.driver/r.frachtEur*100).toFixed(0)}% frachtu — ${r.routeDays?.toFixed(1)} d × 181,95 EUR = ${Math.round(bd.driver)} EUR przy frachcie ${Math.round(r.frachtEur)} EUR`);
         if (r.distanceKm < 300)
-          diagnoses.push(`Krótka trasa (${Math.round(r.distanceKm)} km) — wysokie koszty stałe (leasing, ubezp.) na małej odległości`);
+          diagnoses.push(`Krótka trasa ładowna (${Math.round(r.distanceKm)} km ładownych${r.emptyKm ? ` z ${Math.round(r.totalKm)} km łącznie L+P` : ""}) — wysokie koszty stałe (leasing, ubezp.) rozkładają się na mało km, za które faktycznie płaci klient`);
         const totalLeasing = bd.leasing + bd.trailerLeasing;
         if (totalLeasing / r.frachtEur > 0.20)
           diagnoses.push(`Leasing (cią. + nacz.) pochłania ${(totalLeasing/r.frachtEur*100).toFixed(0)}% frachtu — ${Math.round(totalLeasing)} € na tej trasie`);
