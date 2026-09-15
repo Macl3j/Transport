@@ -39,7 +39,11 @@ function riskOf(typ: string | null) { return RISK_INFO[typ ?? ""] ?? RISK_DEFAUL
 function toIso(v: unknown): string | null {
   if (v instanceof Date) {
     if (isNaN(v.getTime())) return null;
-    return v.toISOString().slice(0, 10);
+    // UWAGA: nie używać toISOString() tutaj — xlsx (cellDates:true) tworzy Date
+    // o północy w strefie LOKALNEJ; konwersja przez UTC (toISOString) cofa datę
+    // o jeden dzień dla PL (UTC+1/+2). Trzeba czytać komponenty lokalne.
+    const y = v.getFullYear(), m = v.getMonth() + 1, d = v.getDate();
+    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
   }
   if (typeof v === "number" && v > 1000) {
     const d = new Date((v - 25569) * 86400 * 1000);
@@ -109,7 +113,9 @@ function parseCostFile(buffer: ArrayBuffer): { rows: Omit<CostInvoice, "id">[]; 
   const col = {
     numer:        idx("Numer"),
     sprzedawca:   idx("Sprzedawca"),
-    typ:          idx("Typ kosztu"),
+    // Realny eksport FK nazywa tę kolumnę "Rodzaj kosztu" (np. "ON", "Leasing", "Autostrady" —
+    // wartości używane przez RISK_INFO); "Typ kosztu" to fallback dla starszych/innych eksportów.
+    typ:          idx("Rodzaj kosztu") !== -1 ? idx("Rodzaj kosztu") : idx("Typ kosztu"),
     status:       idx("Status spłaty"),
     wystawienia:  idx("Data wystawienia"),
     termin:       idx("Termin płatności"),
