@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import * as XLSX from "xlsx";
 import type { AuthSession as Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 
@@ -78,6 +79,94 @@ const EVENT_LABELS: Record<EventType, string> = {
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
 }
+
+// ── Import rejestru kosztów (ten sam format co /platnosci) ─────
+interface CostInvoiceRow {
+  numer: string | null;
+  sprzedawca: string | null;
+  typ_kosztu: string | null;
+  status_splaty: string | null;
+  data_wystawienia: string | null;
+  termin_platnosci: string | null;
+  data_zaplaty: string | null;
+  brutto_pln: number | null;
+  pozostalo_do_zaplaty_pln: number | null;
+  pojazd_reg: string | null;
+  kraj_sprzedawcy: string | null;
+}
+function toIso(v: unknown): string | null {
+  if (v instanceof Date) {
+    if (isNaN(v.getTime())) return null;
+    // xlsx (cellDates:true) tworzy Date o północy w strefie LOKALNEJ — czytamy
+    // komponenty lokalne, nie toISOString() (cofnąłby datę o dzień dla PL).
+    const y = v.getFullYear(), m = v.getMonth() + 1, d = v.getDate();
+    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  }
+  if (typeof v === "number" && v > 1000) {
+    const d = new Date((v - 25569) * 86400 * 1000);
+    if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  }
+  return null;
+}
+function numOrNull(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return isNaN(n) ? null : n;
+}
+function strOrNull(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s === "" ? null : s;
+}
+function parseCostFile(buffer: ArrayBuffer): { rows: CostInvoiceRow[]; error?: string } {
+  const wb = XLSX.read(new Uint8Array(buffer), { type: "array", cellDates: true });
+  let sheetName = wb.SheetNames.includes("Sheet") ? "Sheet" : wb.SheetNames[0];
+  if (!wb.SheetNames.includes("Sheet")) {
+    let best = wb.SheetNames[0], bestLen = 0;
+    for (const n of wb.SheetNames) {
+      const len = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1 }).length;
+      if (len > bestLen) { bestLen = len; best = n; }
+    }
+    sheetName = best;
+  }
+  const ws = wb.Sheets[sheetName];
+  const raw = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: null });
+
+  let headerRow = -1;
+  for (let r = 0; r < Math.min(raw.length, 5); r++) {
+    const row = (raw[r] as unknown[]).map(v => String(v ?? ""));
+    if (row.includes("Numer") && row.includes("Sprzedawca") && row.includes("Termin płatności")) { headerRow = r; break; }
+  }
+  if (headerRow === -1) return { rows: [], error: "Nie rozpoznano formatu — brak kolumn 'Numer' / 'Sprzedawca' / 'Termin płatności'." };
+
+  const header = (raw[headerRow] as unknown[]).map(v => String(v ?? ""));
+  const idx = (name: string) => header.indexOf(name);
+  const col = {
+    numer: idx("Numer"), sprzedawca: idx("Sprzedawca"),
+    typ: idx("Rodzaj kosztu") !== -1 ? idx("Rodzaj kosztu") : idx("Typ kosztu"),
+    status: idx("Status spłaty"), wystawienia: idx("Data wystawienia"),
+    termin: idx("Termin płatności"), zaplata: idx("Data zapłaty"),
+    brutto: idx("Brutto PLN"), pozostalo: idx("Pozostało do zapłaty w PLN"),
+    pojazd: idx("Pojazd nr rej"), kraj: idx("Kraj sprzedawcy"),
+  };
+
+  const rows: CostInvoiceRow[] = [];
+  for (let r = headerRow + 1; r < raw.length; r++) {
+    const row = raw[r] as unknown[];
+    if (!row || row.length === 0 || !row[col.numer]) continue;
+    rows.push({
+      numer: strOrNull(row[col.numer]), sprzedawca: strOrNull(row[col.sprzedawca]),
+      typ_kosztu: strOrNull(row[col.typ]), status_splaty: strOrNull(row[col.status]),
+      data_wystawienia: toIso(row[col.wystawienia]), termin_platnosci: toIso(row[col.termin]),
+      data_zaplaty: toIso(row[col.zaplata]), brutto_pln: numOrNull(row[col.brutto]),
+      pozostalo_do_zaplaty_pln: numOrNull(row[col.pozostalo]), pojazd_reg: strOrNull(row[col.pojazd]),
+      kraj_sprzedawcy: col.kraj !== -1 ? strOrNull(row[col.kraj]) : null,
+    });
+  }
+  return { rows };
+}
+interface VendorSuggestion { name: string; total: number; overdue: number; maxDaysOverdue: number; n: number; }
+
 function fmtPLN(n: number) {
   return n.toLocaleString("pl-PL", { maximumFractionDigits: 0 }) + " PLN";
 }
@@ -184,6 +273,14 @@ function WindykacjaDashboard({ session }: { session: Session }) {
   });
   const [saving, setSaving] = useState(false);
 
+  const [showImport, setShowImport] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [suggestions, setSuggestions] = useState<VendorSuggestion[]>([]);
+  const [addingSuggestion, setAddingSuggestion] = useState<string | null>(null);
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set());
+  const fileRef = useRef<HTMLInputElement>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     const { data } = await supabase
@@ -203,6 +300,85 @@ function WindykacjaDashboard({ session }: { session: Session }) {
   }, []);
 
   useEffect(() => { load(); loadProfiles(); }, [load, loadProfiles]);
+
+  // Sugestie: wierzyciele z rejestru kosztów, których jeszcze nie ma na liście.
+  const computeSuggestions = useCallback(async (currentCreditors: Creditor[]) => {
+    let all: { sprzedawca: string | null; status_splaty: string | null; pozostalo_do_zaplaty_pln: number | null; termin_platnosci: string | null }[] = [];
+    let from = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from("cost_invoices")
+        .select("sprzedawca,status_splaty,pozostalo_do_zaplaty_pln,termin_platnosci")
+        .range(from, from + 999);
+      if (error || !data) break;
+      all = all.concat(data);
+      if (data.length < 1000) break;
+      from += 1000;
+    }
+    const today = todayStr();
+    const known = new Set(currentCreditors.map(c => c.name.trim().toLowerCase()));
+    const byVendor = new Map<string, VendorSuggestion>();
+    for (const r of all) {
+      if (r.status_splaty === "Spłacony" || (r.pozostalo_do_zaplaty_pln ?? 0) <= 0.01) continue;
+      const name = (r.sprzedawca ?? "").trim();
+      if (!name || known.has(name.toLowerCase())) continue;
+      const cur = byVendor.get(name) ?? { name, total: 0, overdue: 0, maxDaysOverdue: 0, n: 0 };
+      cur.total += r.pozostalo_do_zaplaty_pln ?? 0;
+      cur.n++;
+      if (r.termin_platnosci && r.termin_platnosci < today) {
+        cur.overdue += r.pozostalo_do_zaplaty_pln ?? 0;
+        const days = Math.round((new Date(today).getTime() - new Date(r.termin_platnosci).getTime()) / 86400000);
+        cur.maxDaysOverdue = Math.max(cur.maxDaysOverdue, days);
+      }
+      byVendor.set(name, cur);
+    }
+    const list = [...byVendor.values()].filter(v => v.total >= 5000).sort((a, b) => b.total - a.total);
+    setSuggestions(list);
+  }, []);
+
+  useEffect(() => { if (creditors.length > 0 || !loading) computeSuggestions(creditors); }, [creditors, loading, computeSuggestions]);
+
+  const handleImportFile = useCallback((file: File) => {
+    setImporting(true);
+    setImportMsg(null);
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const buf = ev.target?.result as ArrayBuffer;
+        const { rows, error } = parseCostFile(buf);
+        if (error) { setImportMsg({ ok: false, text: error }); setImporting(false); return; }
+        if (rows.length === 0) { setImportMsg({ ok: false, text: "Brak wierszy do zaimportowania." }); setImporting(false); return; }
+
+        // Import zastępuje pełny zbiór w cost_invoices — plik to zawsze aktualny, pełny eksport.
+        const { error: delErr } = await supabase.from("cost_invoices").delete().gte("imported_at", "1900-01-01");
+        if (delErr) throw delErr;
+        let imported = 0;
+        for (let i = 0; i < rows.length; i += 500) {
+          const batch = rows.slice(i, i + 500);
+          const { error: insErr } = await supabase.from("cost_invoices").insert(batch as never[]);
+          if (insErr) throw insErr;
+          imported += batch.length;
+        }
+        setImportMsg({ ok: true, text: `Zaimportowano ${imported} faktur do rejestru kosztów. Lista sugestii niżej odświeżona.` });
+        await computeSuggestions(creditors);
+      } catch (err: unknown) {
+        setImportMsg({ ok: false, text: `Błąd importu: ${err instanceof Error ? err.message : String(err)}` });
+      } finally {
+        setImporting(false);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }, [creditors, computeSuggestions]);
+
+  async function addSuggestionAsCreditor(s: VendorSuggestion) {
+    setAddingSuggestion(s.name);
+    const note = `Dodane automatycznie z importu rejestru kosztów: ${s.n} faktur, ${Math.round(s.overdue).toLocaleString("pl-PL")} PLN po terminie (maks. ${s.maxDaysOverdue} dni). Dane kontaktowe do uzupełnienia.`;
+    const { error } = await supabase.from("creditors").insert({
+      name: s.name, category: "dostawca", total_amount_pln: Math.round(s.total), status: "otwarte", notes: note,
+    });
+    setAddingSuggestion(null);
+    if (!error) { setSuggestions((list) => list.filter((x) => x.name !== s.name)); await load(); }
+  }
 
   async function handleAddCreditor() {
     if (!newForm.name.trim()) return;
@@ -257,11 +433,65 @@ function WindykacjaDashboard({ session }: { session: Session }) {
         </div>
         <div className="flex items-center gap-3">
           <AccountMenu session={session} />
+          <button className="btn-secondary" onClick={() => setShowImport((v) => !v)}>
+            📥 Aktualizuj dane finansowe
+          </button>
           <button className="btn-primary" onClick={() => setShowNew((v) => !v)}>
             + Nowy wierzyciel
           </button>
         </div>
       </div>
+
+      {/* Import rejestru kosztów */}
+      {showImport && (
+        <div className="card space-y-2">
+          <h3 className="text-sm font-semibold text-slate-700">Aktualizacja danych finansowych</h3>
+          <p className="text-xs text-slate-500">
+            Wgraj pełny eksport „Rejestr kosztów” (ten sam format co w module Płatności) — zastąpi cały rejestr faktur
+            kosztowych aktualnymi danymi i odświeży listę sugestii wierzycieli poniżej. Ręcznie dodani wierzyciele
+            i ich notatki/kontakty nie są ruszane.
+          </p>
+          <div className="flex items-center gap-3">
+            <input ref={fileRef} type="file" accept=".xlsx,.xls" className="text-sm"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportFile(f); e.target.value = ""; }} />
+            {importing && <span className="text-xs text-slate-400">Importuję…</span>}
+          </div>
+          {importMsg && (
+            <div className={`text-sm ${importMsg.ok ? "text-emerald-600" : "text-red-600"}`}>{importMsg.text}</div>
+          )}
+        </div>
+      )}
+
+      {/* Sugerowani wierzyciele z rejestru kosztów */}
+      {suggestions.filter((s) => !dismissedSuggestions.has(s.name)).length > 0 && (
+        <div className="card space-y-2">
+          <h3 className="text-sm font-semibold text-slate-700">
+            Sugerowani wierzyciele ({suggestions.filter((s) => !dismissedSuggestions.has(s.name)).length}) — są w rejestrze kosztów, ale nie na liście windykacji
+          </h3>
+          <div className="space-y-1.5 max-h-72 overflow-y-auto">
+            {suggestions.filter((s) => !dismissedSuggestions.has(s.name)).map((s) => (
+              <div key={s.name} className="flex items-center justify-between gap-3 text-sm bg-slate-50 rounded-lg px-3 py-2">
+                <div>
+                  <span className="font-medium text-slate-800">{s.name}</span>
+                  <span className="text-xs text-slate-500 ml-2">
+                    {fmtPLN(s.total)} · {s.n} faktur{s.overdue > 0 && ` · ${fmtPLN(s.overdue)} po terminie (maks. ${s.maxDaysOverdue} dni)`}
+                  </span>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <button className="text-xs text-blue-600 hover:underline" disabled={addingSuggestion === s.name}
+                    onClick={() => addSuggestionAsCreditor(s)}>
+                    {addingSuggestion === s.name ? "Dodaję…" : "+ Dodaj"}
+                  </button>
+                  <button className="text-xs text-slate-400 hover:underline"
+                    onClick={() => setDismissedSuggestions((d) => new Set(d).add(s.name))}>
+                    Pomiń
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Nowy wierzyciel */}
       {showNew && (
