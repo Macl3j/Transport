@@ -93,6 +93,10 @@ interface RouteMetric {
   driverName: string;     // z kolumny "Kierowca 1"
   tripTimestamp?: number;      // Unix ms — dla ułamkowych gap calculations
   deliveryTimestamp?: number;  // Unix ms — dla ułamkowych gap calculations
+  // Krótkie trasy (<10 km ładownych) — realny fracht, ale zbyt małe km żeby liczyć się
+  // do głównych statystyk marży (np. zlecenia korygujące/dopłaty spedycji do innej trasy).
+  // Liczone i pokazywane osobno zamiast być cicho odrzucane — patrz sekcja "Zlecenia korygujące".
+  isShortRoute: boolean;
 }
 
 interface DispatcherKPI {
@@ -113,6 +117,12 @@ interface DispatcherKPI {
   profitable: number;
   avgMarginPct: number;
   routeList: RouteMetric[];
+  // Krótkie trasy (<10 km) — osobna kategoria, wyłączona z powyższych statystyk (routes/
+  // frachtEur/marginEur/losses.../routeList), ale nadal w pełni policzona (koszt, marża).
+  shortRouteList: RouteMetric[];
+  shortRoutesCount: number;
+  shortRoutesFrachtEur: number;
+  shortRoutesMarginEur: number;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────
@@ -191,6 +201,7 @@ export default function DyspozytorzyPage() {
   const [activeTab, setActiveTab] = useState<"config" | "dashboard" | "routes" | "clients" | "monthly" | "idle">("dashboard");
   const [selectedDispatcher, setSelectedDispatcher] = useState<string | null>(null);
   const [showUnassigned, setShowUnassigned] = useState(false);
+  const [showShortRoutes, setShowShortRoutes] = useState(false);
   const [weekLabel, setWeekLabel] = useState("");
   const [eurRate, setEurRate] = useState(4.27);
   const [fuelPrice, setFuelPrice] = useState(1.25);
@@ -376,7 +387,10 @@ export default function DyspozytorzyPage() {
       const emptyKm    = kmLadOdo > 0
         ? (kmPusteOdo > 0 ? kmPusteOdo : undefined)
         : (kmPusteMapa > 0 ? kmPusteMapa : undefined);
-      if (distanceKm < 10) continue;
+      // Trasy <10 km liczymy nadal (osobna kategoria "zlecenia korygujące" — patrz
+      // RouteMetric.isShortRoute), tylko prawdziwie puste/błędne wiersze odrzucamy tu.
+      if (distanceKm <= 0) continue;
+      const isShortRoute = distanceKm < 10;
 
       const frachtRaw = get(row, "fracht z wal", "fracht");
       let frachtEur = parseFracht(frachtRaw, eurRate);
@@ -510,6 +524,7 @@ export default function DyspozytorzyPage() {
         deliveryDate, driverName,
         tripTimestamp: pickupTs,
         deliveryTimestamp: deliveryTs,
+        isShortRoute,
       });
     }
 
@@ -522,7 +537,9 @@ export default function DyspozytorzyPage() {
       grouped[key].push(m);
     }
 
-    const buildKpi = (d: {id: string; name: string}, routes: RouteMetric[], vehs: Vehicle[]) => {
+    const buildKpi = (d: {id: string; name: string}, allRoutesForDisp: RouteMetric[], vehs: Vehicle[]) => {
+      const routes = allRoutesForDisp.filter(r => !r.isShortRoute);
+      const shortRoutes = allRoutesForDisp.filter(r => r.isShortRoute);
       const frachtEur = routes.reduce((s, r) => s + r.frachtEur, 0);
       const costEur   = routes.reduce((s, r) => s + r.totalCost, 0);
       const marginEur = frachtEur - costEur;
@@ -540,6 +557,10 @@ export default function DyspozytorzyPage() {
         profitable: routes.filter(r => r.marginPct >= 15).length,
         avgMarginPct: routes.length > 0 ? routes.reduce((s,r) => s+r.marginPct,0)/routes.length : 0,
         routeList: routes,
+        shortRouteList: shortRoutes,
+        shortRoutesCount: shortRoutes.length,
+        shortRoutesFrachtEur: shortRoutes.reduce((s, r) => s + r.frachtEur, 0),
+        shortRoutesMarginEur: shortRoutes.reduce((s, r) => s + r.marginEur, 0),
       };
     };
 
@@ -551,8 +572,10 @@ export default function DyspozytorzyPage() {
     });
 
     // Add unassigned
-    const unassigned = grouped[UNASSIGNED] ?? [];
-    if (unassigned.length > 0) {
+    const unassignedAll = grouped[UNASSIGNED] ?? [];
+    const unassigned = unassignedAll.filter(r => !r.isShortRoute);
+    const unassignedShort = unassignedAll.filter(r => r.isShortRoute);
+    if (unassignedAll.length > 0) {
       const fr = unassigned.reduce((s,r)=>s+r.frachtEur,0);
       const co = unassigned.reduce((s,r)=>s+r.totalCost,0);
       kpis.push({
@@ -566,6 +589,10 @@ export default function DyspozytorzyPage() {
         profitable: unassigned.filter(r=>r.marginPct>=15).length,
         avgMarginPct: unassigned.length > 0 ? unassigned.reduce((s,r)=>s+r.marginPct,0)/unassigned.length : 0,
         routeList: unassigned,
+        shortRouteList: unassignedShort,
+        shortRoutesCount: unassignedShort.length,
+        shortRoutesFrachtEur: unassignedShort.reduce((s,r)=>s+r.frachtEur,0),
+        shortRoutesMarginEur: unassignedShort.reduce((s,r)=>s+r.marginEur,0),
       });
     }
 
@@ -1051,6 +1078,68 @@ export default function DyspozytorzyPage() {
                 );
               })()}
 
+              {/* Zlecenia korygujące — krótkie trasy (<10 km), osobna kategoria */}
+              {(() => {
+                const allShort = kpiData.flatMap(d => d.shortRouteList);
+                if (allShort.length === 0) return null;
+                const totalFracht = allShort.reduce((s, r) => s + r.frachtEur, 0);
+                const totalMargin = allShort.reduce((s, r) => s + r.marginEur, 0);
+                return (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setShowShortRoutes(v => !v)}
+                    className="w-full p-4 flex items-start gap-3 text-left hover:bg-blue-100/60 transition-colors"
+                  >
+                    <span className="text-blue-600 text-xl">↔</span>
+                    <div className="flex-1">
+                      <p className="font-semibold text-blue-800">
+                        {allShort.length} zleceń korygujących (trasy &lt;10 km)
+                        <span className="font-normal text-blue-700"> · fracht {fmtEur(totalFracht)} · marża {fmtEur(totalMargin)}</span>
+                      </p>
+                      <p className="text-sm text-blue-700">
+                        Krótkie, lokalne trasy — często dopłaty/wyrównania stawki do innego zlecenia (patrz pole „Wymagania”). Liczone osobno, nie wchodzą do głównych statystyk marży dyspozytora.
+                      </p>
+                    </div>
+                    <span className={`text-blue-500 transition-transform ${showShortRoutes ? "rotate-180" : ""}`}>▾</span>
+                  </button>
+
+                  {showShortRoutes && (
+                    <div className="border-t border-blue-200 bg-white px-4 py-3 max-h-96 overflow-y-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-left text-slate-400 uppercase tracking-wide">
+                            <th className="py-1.5 pr-3">Zlecenie</th>
+                            <th className="py-1.5 pr-3">Zleceniodawca</th>
+                            <th className="py-1.5 pr-3">Dyspozytor</th>
+                            <th className="py-1.5 pr-3">Pojazd</th>
+                            <th className="py-1.5 pr-3 text-right">Km</th>
+                            <th className="py-1.5 pr-3 text-right">Fracht</th>
+                            <th className="py-1.5 pr-3 text-right">Marża</th>
+                            <th className="py-1.5">Data</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {[...allShort].sort((a, b) => b.frachtEur - a.frachtEur).map(r => (
+                            <tr key={r.orderNr} className="border-t border-slate-100 hover:bg-blue-50/40 cursor-pointer" onClick={() => setAnalysisRoute(r)}>
+                              <td className="py-1.5 pr-3 font-mono text-slate-500">{r.orderNr}</td>
+                              <td className="py-1.5 pr-3 text-slate-700 max-w-[140px] truncate" title={r.client}>{r.client}</td>
+                              <td className="py-1.5 pr-3 text-slate-600">{r.dispatcherName}</td>
+                              <td className="py-1.5 pr-3 font-mono font-semibold text-slate-700">{r.vehicle}</td>
+                              <td className="py-1.5 pr-3 text-right text-slate-500">{r.distanceKm.toFixed(1)}</td>
+                              <td className="py-1.5 pr-3 text-right text-slate-600 whitespace-nowrap">{fmtEur(r.frachtEur)}</td>
+                              <td className={`py-1.5 pr-3 text-right font-semibold ${marginColor(r.marginPct)}`}>{fmtEur(r.marginEur)}</td>
+                              <td className="py-1.5 text-slate-400 whitespace-nowrap">{r.tripDate}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+                );
+              })()}
+
               {/* Drill-down — selected dispatcher */}
               {selectedKpi && (() => {
                 // Ranking klientów per dyspozytor
@@ -1191,6 +1280,46 @@ export default function DyspozytorzyPage() {
                     </tbody>
                   </table>
                 </div>
+
+                {selectedKpi.shortRouteList.length > 0 && (
+                  <div className="card p-0 overflow-hidden border-blue-200">
+                    <div className="px-4 py-3 bg-blue-50 border-b border-blue-200">
+                      <h3 className="font-bold text-blue-800">
+                        Zlecenia korygujące — {selectedKpi.name}
+                        <span className="font-normal text-blue-700 text-sm ml-2">
+                          {selectedKpi.shortRoutesCount} · fracht {fmtEur(selectedKpi.shortRoutesFrachtEur)} · marża {fmtEur(selectedKpi.shortRoutesMarginEur)}
+                        </span>
+                      </h3>
+                      <p className="text-xs text-blue-600 mt-0.5">Trasy &lt;10 km — osobno od statystyk marży powyżej, patrz pole „Wymagania” dla kontekstu dopłaty.</p>
+                    </div>
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50 border-b">
+                        <tr>
+                          <th className="text-left px-4 py-2 text-xs font-semibold text-slate-500 uppercase">Zlecenie</th>
+                          <th className="text-left px-4 py-2 text-xs font-semibold text-slate-500 uppercase">Zleceniodawca</th>
+                          <th className="text-left px-4 py-2 text-xs font-semibold text-slate-500 uppercase">Pojazd</th>
+                          <th className="text-right px-4 py-2 text-xs font-semibold text-slate-500 uppercase">Km</th>
+                          <th className="text-right px-4 py-2 text-xs font-semibold text-slate-500 uppercase">Fracht</th>
+                          <th className="text-right px-4 py-2 text-xs font-semibold text-slate-500 uppercase">Marża</th>
+                          <th className="text-left px-4 py-2 text-xs font-semibold text-slate-500 uppercase">Data</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {[...selectedKpi.shortRouteList].sort((a, b) => b.frachtEur - a.frachtEur).map(r => (
+                          <tr key={r.orderNr} onClick={() => setAnalysisRoute(r)} className="cursor-pointer hover:bg-blue-50/30">
+                            <td className="px-4 py-2 font-mono text-xs text-slate-600">{r.orderNr}</td>
+                            <td className="px-4 py-2 text-xs text-slate-700 max-w-[140px] truncate" title={r.client}>{r.client}</td>
+                            <td className="px-4 py-2 font-mono text-xs font-semibold">{r.vehicle}</td>
+                            <td className="px-4 py-2 text-right text-xs text-slate-500">{r.distanceKm.toFixed(1)}</td>
+                            <td className="px-4 py-2 text-right text-xs font-medium">{Math.round(r.frachtEur).toLocaleString("pl-PL")}</td>
+                            <td className={`px-4 py-2 text-right text-xs font-bold ${marginColor(r.marginPct)}`}>{fmtEur(r.marginEur)}</td>
+                            <td className="px-4 py-2 text-xs text-slate-400">{r.tripDate}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
                 </div>
                 );
               })()}
