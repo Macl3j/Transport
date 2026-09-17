@@ -583,6 +583,18 @@ interface RouteHistoryRow {
   delivery_date: string | null;
 }
 
+// Niektóre eksporty z FK oznaczają nagłówki gwiazdką ("Ref. zleceniodawcy *",
+// "Fracht z walutą *") — dodaje odpowiedniki bez gwiazdki, żeby lookupy typu
+// row["Fracht z walutą"] trafiały niezależnie od tego, czy eksport ją ma.
+function withDeAsterisked(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...row };
+  for (const key of Object.keys(row)) {
+    const bare = key.replace(/\s*\*\s*$/, "");
+    if (bare !== key && !(bare in out)) out[bare] = row[key];
+  }
+  return out;
+}
+
 async function importRejestr(
   rows: Record<string, unknown>[],
   _filename: string
@@ -590,6 +602,7 @@ async function importRejestr(
   let skipped = 0;
 
   const validRows: RouteHistoryRow[] = rows
+    .map(withDeAsterisked)
     .map((row): RouteHistoryRow | null => {
       // "Nr pełny" is the order number — primary identifier
       const orderNr = strOrNull(row["Nr pełny"] ?? row["Nr pelny"] ?? row["Nr"]);
