@@ -245,10 +245,13 @@ function strOrNull(v: unknown): string | null {
 
 function dateOrNull(v: unknown): string | null {
   if (v === null || v === undefined || v === "") return null;
-  // SheetJS with cellDates:true returns JS Date objects
+  // SheetJS with cellDates:true returns JS Date objects at LOCAL midnight —
+  // toISOString() converts to UTC and rolls the date back a day for PL
+  // (UTC+1/+2), so read local Y/M/D components instead.
   if (v instanceof Date) {
     if (isNaN(v.getTime())) return null;
-    return v.toISOString().split("T")[0];
+    const y = v.getFullYear(), m = v.getMonth() + 1, d = v.getDate();
+    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
   }
   // Fallback: numeric Excel serial
   const n = Number(v);
