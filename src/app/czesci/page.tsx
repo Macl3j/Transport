@@ -145,6 +145,8 @@ function CzesciDashboard({ session }: { session: Session }) {
   const [selectedReg, setSelectedReg] = useState<string | null>(null);
   const [addReg, setAddReg] = useState("");
   const [partFilter, setPartFilter] = useState<"all" | PartStatus>("all");
+  const [search, setSearch] = useState("");
+  const [addSearch, setAddSearch] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -177,8 +179,18 @@ function CzesciDashboard({ session }: { session: Session }) {
     .reduce((s, p) => s + Number(p.asking_price_pln || 0), 0);
   const activeJobs = jobs.filter((j) => j.status !== "zakonczona").length;
 
+  // Wyszukiwanie ignoruje wielkość liter, spacje i myślniki w numerze rejestracyjnym
+  const norm = (s: string | null | undefined) => (s ?? "").toLowerCase().replace(/[\s-]/g, "");
+  const vehicleMatches = (reg: string, q: string) => {
+    const nq = norm(q);
+    if (!nq) return true;
+    const v = vehMap.get(reg);
+    return [reg, v?.brand, v?.model, v?.vehicle_type].some((f) => norm(f).includes(nq));
+  };
+
   const candidates = vehicles
     .filter((v) => !jobs.some((j) => j.vehicle_reg === v.reg))
+    .filter((v) => vehicleMatches(v.reg, addSearch))
     .sort((a, b) => Number(a.is_active) - Number(b.is_active) || a.reg.localeCompare(b.reg));
 
   async function addJob() {
@@ -189,7 +201,10 @@ function CzesciDashboard({ session }: { session: Session }) {
   }
 
   const selectedJob = jobs.find((j) => j.vehicle_reg === selectedReg) ?? null;
-  const filteredParts = parts.filter((p) => partFilter === "all" || p.status === partFilter);
+  const filteredJobs = jobs.filter((j) => vehicleMatches(j.vehicle_reg, search));
+  const filteredParts = parts.filter((p) =>
+    (partFilter === "all" || p.status === partFilter) &&
+    (vehicleMatches(p.vehicle_reg, search) || norm(p.name).includes(norm(search)) || norm(p.spec).includes(norm(search))));
 
   return (
     <div className="space-y-5">
@@ -224,8 +239,10 @@ function CzesciDashboard({ session }: { session: Session }) {
             <div className="card p-3 flex gap-2 items-end">
               <div className="flex-1">
                 <label className="label">Dodaj pojazd do rozbiórki / sprzedaży</label>
+                <input className="input-field mb-1.5" placeholder="Szukaj w flocie: nr rej., marka, model…"
+                  value={addSearch} onChange={(e) => { setAddSearch(e.target.value); setAddReg(""); }} />
                 <select className="input-field bg-white" value={addReg} onChange={(e) => setAddReg(e.target.value)}>
-                  <option value="">— wybierz pojazd (nieaktywne na górze) —</option>
+                  <option value="">— {candidates.length === 0 ? "brak pasujących pojazdów" : `wybierz pojazd (${candidates.length}, nieaktywne na górze)`} —</option>
                   {candidates.map((v) => (
                     <option key={v.reg} value={v.reg}>
                       {v.reg} · {[v.brand, v.model].filter(Boolean).join(" ") || v.vehicle_type}{v.is_active ? "" : " · nieaktywny"}
@@ -237,11 +254,16 @@ function CzesciDashboard({ session }: { session: Session }) {
             </div>
 
             <div className="card p-0 overflow-hidden">
+              <div className="p-3 border-b border-slate-100">
+                <input className="input-field" placeholder="Szukaj pojazdu w rozbiórce: nr rej., marka, model…"
+                  value={search} onChange={(e) => setSearch(e.target.value)} />
+              </div>
               {loading ? <div className="p-6 text-sm text-slate-400">Ładowanie…</div>
                 : jobs.length === 0 ? <div className="p-6 text-sm text-slate-400 text-center">Brak pojazdów w rozbiórce</div>
+                : filteredJobs.length === 0 ? <div className="p-6 text-sm text-slate-400 text-center">Brak pojazdów pasujących do „{search}”</div>
                 : (
                 <div className="divide-y divide-slate-100 max-h-[65vh] overflow-y-auto">
-                  {jobs.map((j) => {
+                  {filteredJobs.map((j) => {
                     const v = vehMap.get(j.vehicle_reg);
                     const jp = parts.filter((p) => p.vehicle_reg === j.vehicle_reg);
                     const sold = jp.reduce((s, p) => s + Number(saleByPart.get(p.id)?.sale_price_pln ?? 0), 0);
@@ -285,6 +307,8 @@ function CzesciDashboard({ session }: { session: Session }) {
         </div>
       ) : (
         <div className="space-y-3">
+          <input className="input-field max-w-md" placeholder="Szukaj części: nr rej., marka, nazwa, specyfikacja…"
+            value={search} onChange={(e) => setSearch(e.target.value)} />
           <div className="flex gap-1.5 flex-wrap">
             {(["all", ...Object.keys(PART_LABELS)] as ("all" | PartStatus)[]).map((s) => (
               <button key={s} onClick={() => setPartFilter(s)}
