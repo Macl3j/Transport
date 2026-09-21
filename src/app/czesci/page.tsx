@@ -189,6 +189,7 @@ function CzesciDashboard({ session }: { session: Session }) {
   };
 
   const candidates = vehicles
+    .filter((v) => v.vehicle_type === "ciągnik" && !v.is_active)
     .filter((v) => !jobs.some((j) => j.vehicle_reg === v.reg))
     .filter((v) => vehicleMatches(v.reg, addSearch))
     .sort((a, b) => Number(a.is_active) - Number(b.is_active) || a.reg.localeCompare(b.reg));
@@ -239,13 +240,13 @@ function CzesciDashboard({ session }: { session: Session }) {
             <div className="card p-3 flex gap-2 items-end">
               <div className="flex-1">
                 <label className="label">Dodaj pojazd do rozbiórki / sprzedaży</label>
-                <input className="input-field mb-1.5" placeholder="Szukaj w flocie: nr rej., marka, model…"
+                <input className="input-field mb-1.5" placeholder="Szukaj wycofanego ciągnika: nr rej., marka, model…"
                   value={addSearch} onChange={(e) => { setAddSearch(e.target.value); setAddReg(""); }} />
                 <select className="input-field bg-white" value={addReg} onChange={(e) => setAddReg(e.target.value)}>
-                  <option value="">— {candidates.length === 0 ? "brak pasujących pojazdów" : `wybierz pojazd (${candidates.length}, nieaktywne na górze)`} —</option>
+                  <option value="">— {candidates.length === 0 ? "brak pasujących pojazdów" : `wybierz wycofany ciągnik (${candidates.length})`} —</option>
                   {candidates.map((v) => (
                     <option key={v.reg} value={v.reg}>
-                      {v.reg} · {[v.brand, v.model].filter(Boolean).join(" ") || v.vehicle_type}{v.is_active ? "" : " · nieaktywny"}
+                      {v.reg} · {[v.brand, v.model].filter(Boolean).join(" ") || v.vehicle_type}
                     </option>
                   ))}
                 </select>
