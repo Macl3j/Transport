@@ -76,6 +76,8 @@ interface RouteMetric {
   frachtEur: number;
   frachtEstimated: boolean;   // true when fracht=0 in TMS → estimated from margin/km
   noFreightData: boolean;     // true when fracht=0 AND no TMS margin — no invoice data at all
+  frachtCurrency: string;     // waluta frachtu w TMS (EUR/PLN/inna); frachtEur to zawsze przeliczenie na EUR
+  frachtOriginal: number;     // kwota frachtu w oryginalnej walucie
   totalCost: number;
   marginEur: number;
   marginPct: number;
@@ -135,14 +137,43 @@ function marginColor(pct: number) {
   return "text-red-600";
 }
 
-function parseFracht(s: string, eurRate: number): number {
-  if (!s) return 0;
-  const str = String(s).replace(/\s/g, "");
-  const m = str.match(/([\d,.]+)([A-Z]{3})/);
-  if (!m) return 0;
-  const num = parseFloat(m[1].replace(",", "."));
-  if (isNaN(num)) return 0;
-  return m[2] === "PLN" ? num / eurRate : num;
+// Fracht z TMS to tekst z kwotą i walutą, np. "3334,50 EUR" albo "6262,40 PLN".
+// Zwraca kwotę w oryginalnej walucie oraz przeliczenie na EUR. Waluta inna niż EUR/PLN
+// NIE jest już po cichu traktowana jak EUR — wtedy eur=0 i recognized=false (wywołujący
+// może użyć kolumny "Fracht EUR netto" z TMS).
+interface ParsedFracht { amount: number; currency: string; eur: number; recognized: boolean }
+function parseFracht(s: string, eurRate: number): ParsedFracht {
+  const none: ParsedFracht = { amount: 0, currency: "EUR", eur: 0, recognized: true };
+  if (!s) return none;
+  const str = String(s).replace(/\s/g, "").toUpperCase();
+  // waluta za kwotą ("6262,40PLN", "1200ZŁ", "500€") lub przed nią ("PLN6262,40")
+  const suf = str.match(/(-?[\d.,]+)([A-ZŁ€]{1,3})/);
+  const pre = suf ? null : str.match(/([A-ZŁ€]{1,3})(-?[\d.,]+)/);
+  if (!suf && !pre) return none;
+  const numStr = suf ? suf[1] : pre![2];
+  const curRaw = suf ? suf[2] : pre![1];
+  // "1.234,56" (kropka tysięcy + przecinek dziesiętny), "1234,56" i "1,234.56"
+  let norm = numStr;
+  if (norm.includes(",") && norm.includes(".")) {
+    norm = norm.lastIndexOf(",") > norm.lastIndexOf(".") ? norm.replace(/\./g, "").replace(",", ".") : norm.replace(/,/g, "");
+  } else norm = norm.replace(",", ".");
+  const amount = parseFloat(norm);
+  if (isNaN(amount)) return none;
+  const currency = curRaw === "ZŁ" ? "PLN" : curRaw === "€" ? "EUR" : curRaw;
+  if (currency === "EUR") return { amount, currency, eur: amount, recognized: true };
+  if (currency === "PLN") return { amount, currency, eur: amount / eurRate, recognized: true };
+  return { amount, currency, eur: 0, recognized: false };
+}
+
+// Adnotacja pod kwotą frachtu: dla zleceń w walucie innej niż EUR pokazuje oryginalną kwotę
+// (np. "6 262 PLN"), żeby było widać, że wartość w € to przeliczenie po kursie z pola EUR/PLN.
+function CurrencyNote({ r }: { r: RouteMetric }) {
+  if (r.noFreightData || r.frachtCurrency === "EUR") return null;
+  return (
+    <div className="text-[10px] font-normal text-indigo-600 whitespace-nowrap">
+      {Math.round(r.frachtOriginal).toLocaleString("pl-PL")} {r.frachtCurrency}
+    </div>
+  );
 }
 
 function toDateKey(s: string): string {
@@ -393,13 +424,26 @@ export default function DyspozytorzyPage() {
       const isShortRoute = distanceKm < 10;
 
       const frachtRaw = get(row, "fracht z wal", "fracht");
-      let frachtEur = parseFracht(frachtRaw, eurRate);
+      const pf = parseFracht(frachtRaw, eurRate);
+      let frachtEur = pf.eur;
+      let frachtCurrency = pf.currency;
+      let frachtOriginal = pf.amount;
+      if (!pf.recognized) {
+        // Waluta inna niż EUR/PLN — nie zakładamy, że to EUR; bierzemy przeliczenie z TMS
+        // ("Fracht EUR netto"), a jeśli go brak, trasa liczy się jak bez faktury.
+        const tmsEur = parseFloat(get(row, "fracht eur netto").replace(/\s/g, "").replace(",", "."));
+        frachtEur = !isNaN(tmsEur) && tmsEur > 0 ? tmsEur : 0;
+      }
       // Niektóre trasy mają częściowy fracht (np. 800€) + dopłatę — "Stawka końcowa Xeuro" w Wymaganiach
       const wymagania = get(row, "wymagania");
       const stawkaMatch = wymagania.match(/stawka\s+ko[ńn]cowa\s+([\d\s,.]+)\s*[€eE]/i);
       if (stawkaMatch) {
         const finalRate = parseFloat(stawkaMatch[1].replace(/[\s]/g, "").replace(",", "."));
-        if (!isNaN(finalRate) && finalRate > frachtEur) frachtEur = finalRate;
+        if (!isNaN(finalRate) && finalRate > frachtEur) {
+          frachtEur = finalRate;
+          frachtCurrency = "EUR";
+          frachtOriginal = finalRate;
+        }
       }
       // NOTE: do NOT skip fracht=0 routes — estimate them like analiza does (see below)
 
@@ -509,6 +553,8 @@ export default function DyspozytorzyPage() {
         originCountry, destCountry, distanceKm, emptyKm,
         totalKm: distanceKm + (emptyKm ?? 0),
         frachtEur, frachtEstimated, noFreightData,
+        frachtCurrency: frachtEstimated ? "EUR" : frachtCurrency,
+        frachtOriginal: frachtEstimated ? frachtEur : frachtOriginal,
         totalCost: bd.total, marginEur: bd.marginEur,
         marginPct: bd.marginPct, tollEur: bd.toll,
         label: noFreightData ? "BRAK DANYCH" : bd.marginPct >= 15 ? "Rentowna" : bd.marginPct >= 5 ? "Niska marża" : bd.marginPct >= 0 ? "Próg" : "STRATA",
@@ -1078,6 +1124,30 @@ export default function DyspozytorzyPage() {
                 );
               })()}
 
+              {/* Waluty frachtu — zlecenia w PLN (głównie krajowe) przeliczone na EUR po kursie z pola EUR/PLN */}
+              {(() => {
+                const every = kpiData.flatMap(d => [...d.routeList, ...d.shortRouteList]).filter(r => !r.noFreightData);
+                const nonEur = every.filter(r => r.frachtCurrency !== "EUR");
+                if (nonEur.length === 0) return null;
+                const byCur: Record<string, { n: number; orig: number; eur: number }> = {};
+                nonEur.forEach(r => {
+                  const g = (byCur[r.frachtCurrency] ??= { n: 0, orig: 0, eur: 0 });
+                  g.n++; g.orig += r.frachtOriginal; g.eur += r.frachtEur;
+                });
+                return (
+                  <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 text-xs text-indigo-900">
+                    <span className="font-semibold">Waluta frachtu: </span>
+                    {Object.entries(byCur).map(([cur, g], i) => (
+                      <span key={cur}>
+                        {i > 0 && " · "}
+                        {g.n} zleceń w {cur} ({Math.round(g.orig).toLocaleString("pl-PL")} {cur} ≈ {Math.round(g.eur).toLocaleString("pl-PL")} €)
+                      </span>
+                    ))}
+                    <span className="text-indigo-700"> — z {every.length} zleceń z frachtem; przeliczenie po kursie EUR/PLN {eurRate} (pole u góry). Pozostałe zlecenia w EUR.</span>
+                  </div>
+                );
+              })()}
+
               {/* Zlecenia korygujące — krótkie trasy (<10 km), osobna kategoria */}
               {(() => {
                 const allShort = kpiData.flatMap(d => d.shortRouteList);
@@ -1127,7 +1197,7 @@ export default function DyspozytorzyPage() {
                               <td className="py-1.5 pr-3 text-slate-600">{r.dispatcherName}</td>
                               <td className="py-1.5 pr-3 font-mono font-semibold text-slate-700">{r.vehicle}</td>
                               <td className="py-1.5 pr-3 text-right text-slate-500">{r.distanceKm.toFixed(1)}</td>
-                              <td className="py-1.5 pr-3 text-right text-slate-600 whitespace-nowrap">{fmtEur(r.frachtEur)}</td>
+                              <td className="py-1.5 pr-3 text-right text-slate-600 whitespace-nowrap">{fmtEur(r.frachtEur)}<CurrencyNote r={r} /></td>
                               <td className={`py-1.5 pr-3 text-right font-semibold ${marginColor(r.marginPct)}`}>{fmtEur(r.marginEur)}</td>
                               <td className="py-1.5 text-slate-400 whitespace-nowrap">{r.tripDate}</td>
                             </tr>
@@ -1260,6 +1330,7 @@ export default function DyspozytorzyPage() {
                           <td className="px-4 py-2 text-right text-xs font-medium">
                             {r.noFreightData ? <span className="text-slate-400 italic">brak fraktury</span> : Math.round(r.frachtEur).toLocaleString("pl-PL")}
                             {r.frachtEstimated && <div className="text-amber-500 text-[10px] font-normal">~szacowany</div>}
+                            <CurrencyNote r={r} />
                           </td>
                           <td className="px-4 py-2 text-right text-xs">{Math.round(r.totalCost).toLocaleString("pl-PL")}</td>
                           <td className={`px-4 py-2 text-right text-xs font-bold ${r.noFreightData?"text-slate-400":marginColor(r.marginPct)}`}>
@@ -1390,6 +1461,7 @@ export default function DyspozytorzyPage() {
                       <td className="px-4 py-2 text-xs">{r.originCountry}→{r.destCountry}</td>
                       <td className="px-4 py-2 text-right text-xs">
                         {r.noFreightData ? <span className="text-slate-400 italic">brak faktury</span> : <>{Math.round(r.frachtEur).toLocaleString("pl-PL")} €</>}
+                        <CurrencyNote r={r} />
                       </td>
                       <td className={`px-4 py-2 text-right text-xs font-bold ${r.noFreightData?"text-slate-400":marginColor(r.marginPct)}`}>
                         {r.noFreightData ? "—" : fmtPct(r.marginPct)}
