@@ -434,6 +434,21 @@ function JobDetail({
     onChanged();
   }
 
+  async function deleteJob() {
+    // dismantle_jobs i vehicle_parts łączy tylko wspólny vehicle_reg (bez FK/cascade),
+    // więc usunięcie pojazdu z częściami zostawiłoby osierocone części bez nadrzędnego
+    // wpisu — blokujemy to, zamiast ciszej kasować powiązane dane.
+    if (parts.length > 0) {
+      alert(`Nie można usunąć — pojazd ma ${parts.length} dodanych części. Usuń najpierw wszystkie części poniżej, dopiero potem pojazd.`);
+      return;
+    }
+    if (!confirm(`Usunąć pojazd ${job.vehicle_reg} z listy rozbiórki? Tej operacji nie można cofnąć.`)) return;
+    const { error } = await supabase.from("dismantle_jobs").delete().eq("id", job.id);
+    if (error) { alert("Nie udało się usunąć: " + error.message); return; }
+    onClose();
+    onChanged();
+  }
+
   return (
     <div className="card space-y-4">
       <div className="flex items-start justify-between">
@@ -446,6 +461,7 @@ function JobDetail({
         </div>
         <div className="flex gap-2">
           {!edit && <button className="text-xs text-blue-600 hover:underline" onClick={() => setEdit(true)}>Edytuj</button>}
+          {!edit && <button className="text-xs text-red-500 hover:underline" onClick={deleteJob}>Usuń pojazd</button>}
           <button className="text-slate-400 hover:text-slate-700" onClick={onClose}>✕</button>
         </div>
       </div>
