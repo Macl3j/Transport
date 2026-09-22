@@ -340,39 +340,88 @@ function PendingList({
 
 function SubmitForm({ session, invoices, onChanged }: { session: Session; invoices: CostInvoice[]; onChanged: () => void }) {
   const [mode, setMode] = useState<Source>("rejestr");
-  const [invoiceId, setInvoiceId] = useState("");
+
+  // Tryb "reczne" — jedna płatność wpisana ręcznie, bez powiązania z rejestrem
   const [vendor, setVendor] = useState("");
   const [amount, setAmount] = useState("");
   const [title, setTitle] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [notes, setNotes] = useState("");
-  const [saving, setSaving] = useState(false);
+
+  // Tryb "rejestr" — wybór wielu faktur naraz (np. wszystkie zaległe u jednego
+  // klienta), żeby nie dodawać ich pojedynczo. Kwota/termin/kontrahent biorą
+  // się wprost z faktury, bez ręcznej edycji — żeby nie rozjechały się z tym,
+  // co faktycznie jest w rejestrze kosztów.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [vendorFilter, setVendorFilter] = useState("");
   const [search, setSearch] = useState("");
+  const [batchNotes, setBatchNotes] = useState("");
+
+  const [saving, setSaving] = useState(false);
+
+  const vendors = [...new Set(invoices.map((i) => i.sprzedawca).filter((v): v is string => !!v))].sort();
 
   const filteredInvoices = invoices.filter((i) => {
+    if (vendorFilter && i.sprzedawca !== vendorFilter) return false;
     const q = search.toLowerCase().trim();
     if (!q) return true;
     return [i.numer, i.sprzedawca].some((f) => (f ?? "").toLowerCase().includes(q));
   });
+  const selectedInvoices = invoices.filter((i) => selectedIds.has(i.id));
+  const selectedTotal = selectedInvoices.reduce((s, i) => s + (i.pozostalo_do_zaplaty_pln ?? i.brutto_pln ?? 0), 0);
 
-  function pickInvoice(id: string) {
-    setInvoiceId(id);
-    const inv = invoices.find((i) => i.id === id);
-    if (inv) {
-      setVendor(inv.sprzedawca ?? "");
-      setAmount(String(inv.pozostalo_do_zaplaty_pln ?? inv.brutto_pln ?? ""));
-      setTitle(inv.numer ?? "");
-      setDueDate(inv.termin_platnosci ?? "");
+  function toggle(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  function selectAllVisible() {
+    setSelectedIds((prev) => new Set([...prev, ...filteredInvoices.map((i) => i.id)]));
+  }
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
+
+  async function submitBatch() {
+    if (selectedInvoices.length === 0) return;
+    setSaving(true);
+    const rows = selectedInvoices.map((i) => ({
+      source: "rejestr" as const,
+      cost_invoice_id: i.id,
+      vendor: i.sprzedawca ?? "—",
+      amount_pln: i.pozostalo_do_zaplaty_pln ?? i.brutto_pln ?? 0,
+      title: i.numer ?? null,
+      due_date: i.termin_platnosci ?? null,
+      notes: batchNotes.trim() || null,
+      submitted_by: session.user.id,
+    }));
+    const { error } = await supabase.from("payment_approvals").insert(rows);
+    setSaving(false);
+    if (!error) {
+      const sameVendor = selectedInvoices.every((i) => i.sprzedawca === selectedInvoices[0].sprzedawca);
+      notifyTeams({
+        kind: "submitted",
+        vendor: sameVendor ? (selectedInvoices[0].sprzedawca ?? "—") : `${selectedInvoices.length} dostawców`,
+        amountPln: selectedTotal,
+        title: `${selectedInvoices.length} ${selectedInvoices.length === 1 ? "faktura" : "faktur"} zgłoszona${selectedInvoices.length === 1 ? "" : "ych"} razem`,
+        submittedByName: session.user.email,
+      });
+      clearSelection(); setBatchNotes("");
+      onChanged();
+    } else {
+      alert("Nie udało się zapisać: " + error.message);
     }
   }
 
-  async function submit() {
+  async function submitManual() {
     const amt = num(amount);
     if (!vendor.trim() || amt == null || amt <= 0) return;
     setSaving(true);
     const { error } = await supabase.from("payment_approvals").insert({
-      source: mode,
-      cost_invoice_id: mode === "rejestr" ? invoiceId || null : null,
+      source: "reczne",
+      cost_invoice_id: null,
       vendor: vendor.trim(),
       amount_pln: amt,
       title: title.trim() || null,
@@ -383,7 +432,7 @@ function SubmitForm({ session, invoices, onChanged }: { session: Session; invoic
     setSaving(false);
     if (!error) {
       notifyTeams({ kind: "submitted", vendor: vendor.trim(), amountPln: amt, title: title.trim() || null, submittedByName: session.user.email });
-      setInvoiceId(""); setVendor(""); setAmount(""); setTitle(""); setDueDate(""); setNotes("");
+      setVendor(""); setAmount(""); setTitle(""); setDueDate(""); setNotes("");
       onChanged();
     } else {
       alert("Nie udało się zapisać: " + error.message);
@@ -393,47 +442,85 @@ function SubmitForm({ session, invoices, onChanged }: { session: Session; invoic
   return (
     <div className="card max-w-2xl space-y-4">
       <div className="flex gap-1.5">
-        <button onClick={() => { setMode("rejestr"); setVendor(""); setAmount(""); setTitle(""); setDueDate(""); }}
+        <button onClick={() => setMode("rejestr")}
           className={`px-3 py-1.5 text-xs font-semibold rounded-lg ${mode === "rejestr" ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600"}`}>
           Z rejestru kosztów
         </button>
-        <button onClick={() => { setMode("reczne"); setInvoiceId(""); setVendor(""); setAmount(""); setTitle(""); setDueDate(""); }}
+        <button onClick={() => setMode("reczne")}
           className={`px-3 py-1.5 text-xs font-semibold rounded-lg ${mode === "reczne" ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600"}`}>
           Wpis ręczny (faktura jeszcze niezaimportowana)
         </button>
       </div>
 
-      {mode === "rejestr" && (
-        <div>
-          <label className="label">Wybierz fakturę ({filteredInvoices.length} nieopłaconych)</label>
-          <input className="input-field mb-1.5" placeholder="Szukaj: dostawca, numer faktury…" value={search} onChange={(e) => setSearch(e.target.value)} />
-          <select className="input-field bg-white" value={invoiceId} onChange={(e) => pickInvoice(e.target.value)}>
-            <option value="">— wybierz fakturę —</option>
-            {filteredInvoices.map((i) => (
-              <option key={i.id} value={i.id}>
-                {i.sprzedawca ?? "—"} · {i.numer ?? "brak nr"} · {fmtPln(i.pozostalo_do_zaplaty_pln ?? i.brutto_pln ?? 0)} · termin {fmtDate(i.termin_platnosci)}
-              </option>
-            ))}
-          </select>
+      {mode === "rejestr" ? (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="label">Klient / dostawca</label>
+              <select className="input-field bg-white" value={vendorFilter} onChange={(e) => setVendorFilter(e.target.value)}>
+                <option value="">— wszyscy ({vendors.length}) —</option>
+                {vendors.map((v) => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Szukaj numeru faktury</label>
+              <input className="input-field" placeholder="np. FV00123" value={search} onChange={(e) => setSearch(e.target.value)} />
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between text-xs text-slate-500">
+            <span>{filteredInvoices.length} nieopłaconych faktur {vendorFilter && `dla ${vendorFilter}`}</span>
+            <div className="flex gap-3">
+              <button type="button" className="text-blue-600 hover:underline" onClick={selectAllVisible}>Zaznacz widoczne</button>
+              {selectedIds.size > 0 && <button type="button" className="text-slate-400 hover:underline" onClick={clearSelection}>Wyczyść zaznaczenie ({selectedIds.size})</button>}
+            </div>
+          </div>
+
+          <div className="border border-slate-200 rounded-lg max-h-72 overflow-y-auto divide-y divide-slate-100">
+            {filteredInvoices.length === 0 && <div className="p-4 text-sm text-slate-400 text-center">Brak pasujących faktur</div>}
+            {filteredInvoices.map((i) => {
+              const amt = i.pozostalo_do_zaplaty_pln ?? i.brutto_pln ?? 0;
+              return (
+                <label key={i.id} className={`flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-slate-50 ${selectedIds.has(i.id) ? "bg-blue-50" : ""}`}>
+                  <input type="checkbox" checked={selectedIds.has(i.id)} onChange={() => toggle(i.id)} />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm text-slate-800 truncate">{i.sprzedawca ?? "—"}</div>
+                    <div className="text-xs text-slate-400">{i.numer ?? "brak nr"} · termin {fmtDate(i.termin_platnosci)}</div>
+                  </div>
+                  <div className="text-sm font-mono text-slate-700 shrink-0">{fmtPln(amt)}</div>
+                </label>
+              );
+            })}
+          </div>
+
+          <div><label className="label">Wspólna notatka (opcjonalnie, dla wszystkich zaznaczonych)</label>
+            <textarea className="input-field" rows={2} value={batchNotes} onChange={(e) => setBatchNotes(e.target.value)} /></div>
+
+          <button className="btn-primary" disabled={saving || selectedInvoices.length === 0} onClick={submitBatch}>
+            {saving ? "Zgłaszam…" : selectedInvoices.length === 0
+              ? "Zaznacz przynajmniej jedną fakturę"
+              : `Zgłoś ${selectedInvoices.length} ${selectedInvoices.length === 1 ? "fakturę" : "faktur"} do akceptacji (${fmtPln(selectedTotal)})`}
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2"><label className="label">Kontrahent</label>
+              <input className="input-field" value={vendor} onChange={(e) => setVendor(e.target.value)} /></div>
+            <div><label className="label">Kwota (PLN)</label>
+              <input className="input-field" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
+            <div><label className="label">Termin płatności</label>
+              <input type="date" className="input-field" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></div>
+            <div className="col-span-2"><label className="label">Tytuł / numer faktury</label>
+              <input className="input-field" value={title} onChange={(e) => setTitle(e.target.value)} /></div>
+            <div className="col-span-2"><label className="label">Notatka (opcjonalnie)</label>
+              <textarea className="input-field" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} /></div>
+          </div>
+          <button className="btn-primary" disabled={saving || !vendor.trim() || num(amount) == null} onClick={submitManual}>
+            {saving ? "Zgłaszam…" : "Zgłoś do akceptacji"}
+          </button>
         </div>
       )}
-
-      <div className="grid grid-cols-2 gap-3">
-        <div className="col-span-2"><label className="label">Kontrahent</label>
-          <input className="input-field" value={vendor} onChange={(e) => setVendor(e.target.value)} disabled={mode === "rejestr" && !!invoiceId} /></div>
-        <div><label className="label">Kwota (PLN)</label>
-          <input className="input-field" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={mode === "rejestr" && !!invoiceId} /></div>
-        <div><label className="label">Termin płatności</label>
-          <input type="date" className="input-field" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></div>
-        <div className="col-span-2"><label className="label">Tytuł / numer faktury</label>
-          <input className="input-field" value={title} onChange={(e) => setTitle(e.target.value)} /></div>
-        <div className="col-span-2"><label className="label">Notatka (opcjonalnie)</label>
-          <textarea className="input-field" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} /></div>
-      </div>
-
-      <button className="btn-primary" disabled={saving || !vendor.trim() || num(amount) == null} onClick={submit}>
-        {saving ? "Zgłaszam…" : "Zgłoś do akceptacji"}
-      </button>
     </div>
   );
 }
