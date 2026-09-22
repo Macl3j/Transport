@@ -25,6 +25,7 @@ const TRANSPORT_GROUPS: NavGroup[] = [
       { href: "/fleet", label: "Flota" },
       { href: "/fms", label: "FMS" },
       { href: "/serwis", label: "Serwis" },
+      { href: "/serwis/zamowienia", label: "Zamówienia części" },
       { href: "/opony", label: "Opony" },
       { href: "/kola", label: "Kółka" },
       { href: "/checklista", label: "Checklista" },
@@ -58,6 +59,7 @@ const TRANSPORT_GROUPS: NavGroup[] = [
 // to tylko 4 pozycje, grupowanie nie ma tu sensu ─────────────────────
 const SERWIS_LINKS: NavLink[] = [
   { href: "/serwis",        label: "Serwis" },
+  { href: "/serwis/zamowienia", label: "Zamówienia części" },
   { href: "/opony",         label: "Opony" },
   { href: "/checklista",    label: "Checklista" },
   { href: "/konfiguracja",  label: "⚙️" },
