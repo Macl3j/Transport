@@ -133,7 +133,15 @@ function AkceptacjeDashboard({ session }: { session: Session }) {
     const [r, a, inv, p] = await Promise.all([
       supabase.from("finance_approval_roles").select("role").eq("user_id", session.user.id),
       supabase.from("payment_approvals").select("*").order("submitted_at", { ascending: false }),
-      supabase.from("cost_invoices").select("id,numer,sprzedawca,termin_platnosci,brutto_pln,pozostalo_do_zaplaty_pln,status_splaty").limit(1000),
+      // Tabela ma tysiące wierszy (głównie już spłacone) — bez filtra i sortowania
+      // po stronie zapytania samo .limit(1000) potrafi trafić w same opłacone
+      // i lista "do wyboru" wychodzi pusta mimo realnych niezapłaconych faktur.
+      // .neq() sam odrzuca NULL-e, więc trzeba je dopisać osobno przez .or().
+      supabase.from("cost_invoices")
+        .select("id,numer,sprzedawca,termin_platnosci,brutto_pln,pozostalo_do_zaplaty_pln,status_splaty")
+        .or("status_splaty.neq.Spłacony,status_splaty.is.null")
+        .order("termin_platnosci", { ascending: true, nullsFirst: false })
+        .limit(1000),
       supabase.from("profiles").select("id,display_name,email"),
     ]);
     const err = r.error ?? a.error;
