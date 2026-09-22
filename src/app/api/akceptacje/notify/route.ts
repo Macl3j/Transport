@@ -7,7 +7,14 @@ import { getAuthedUser } from "@/lib/crmAuth";
 // szablonu "Wysyłaj alerty elementu webhook na kanał" (aplikacja Workflows →
 // wyszukaj "webhook" → wybierz ten szablon → kanał Akceptacje). Stare
 // "Incoming Webhook" (Connectors) jest w Teams wycofane, stąd ten szablon.
-// Jego trigger oczekuje prostego {"text": "..."} — nie starego MessageCard.
+//
+// WAŻNE: ten konkretny przepływ przekazuje całe ciało żądania wprost do akcji
+// "Post card in a chat or channel" — oczekuje więc GOTOWEJ Adaptive Card
+// (JSON z "type": "AdaptiveCard"), a nie prostego {"text": "..."} ani
+// starego formatu MessageCard. Potwierdzone empirycznie: próba z {"text"}
+// kończyła się błędem "Property 'type' must be 'AdaptiveCard'" w historii
+// przebiegów przepływu.
+//
 // Dopóki zmienna nie jest ustawiona, endpoint nic nie robi (nie blokuje
 // zgłaszania/akceptowania płatności) — tylko loguje ostrzeżenie na serwerze.
 
@@ -22,6 +29,7 @@ interface NotifyBody {
 }
 
 const VERB = { submitted: "🟠 Nowe zgłoszenie do akceptacji", approved: "✅ Płatność zatwierdzona", rejected: "🔴 Płatność odrzucona" };
+const COLOR = { submitted: "Warning", approved: "Good", rejected: "Attention" } as const;
 
 export async function POST(req: Request) {
   try {
@@ -40,17 +48,31 @@ export async function POST(req: Request) {
     }
 
     const amount = body.amountPln.toLocaleString("pl-PL", { maximumFractionDigits: 0 }) + " PLN";
-    const lines = [`**${VERB[body.kind]}**`, `Kontrahent: ${body.vendor}`, `Kwota: ${amount}`];
-    if (body.title) lines.push(`Tytuł: ${body.title}`);
-    if (body.submittedByName) lines.push(`Zgłosił: ${body.submittedByName}`);
-    if (body.kind !== "submitted" && body.decidedByName) lines.push(`Decyzja: ${body.decidedByName}`);
-    if (body.kind === "rejected" && body.decisionNote) lines.push(`Powód odrzucenia: ${body.decisionNote}`);
-    lines.push("", "https://transport-eight-gamma.vercel.app/akceptacje");
+    const facts: { title: string; value: string }[] = [
+      { title: "Kontrahent", value: body.vendor },
+      { title: "Kwota", value: amount },
+    ];
+    if (body.title) facts.push({ title: "Tytuł", value: body.title });
+    if (body.submittedByName) facts.push({ title: "Zgłosił", value: body.submittedByName });
+    if (body.kind !== "submitted" && body.decidedByName) facts.push({ title: "Decyzja", value: body.decidedByName });
+    if (body.kind === "rejected" && body.decisionNote) facts.push({ title: "Powód odrzucenia", value: body.decisionNote });
+
+    const adaptiveCard = {
+      type: "AdaptiveCard",
+      $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+      version: "1.4",
+      body: [
+        { type: "TextBlock", text: "B&M Invest Group", weight: "Lighter", size: "Small", spacing: "None" },
+        { type: "TextBlock", text: VERB[body.kind], weight: "Bolder", size: "Medium", wrap: true, color: COLOR[body.kind] },
+        { type: "FactSet", facts },
+        { type: "TextBlock", text: "[Otwórz moduł akceptacji](https://transport-eight-gamma.vercel.app/akceptacje)", wrap: true, spacing: "Small" },
+      ],
+    };
 
     const res = await fetch(webhookUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: lines.join("  \n") }),
+      body: JSON.stringify(adaptiveCard),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
