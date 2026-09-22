@@ -24,6 +24,7 @@ const TRANSPORT_LINKS: { href: string; label: string }[] = [
   { href: "/budzet",        label: "Budżet" },
   { href: "/platnosci",     label: "Płatności 💰" },
   { href: "/windykacja",    label: "Windykacja" },
+  { href: "/akceptacje",    label: "Akceptacje" },
   { href: "/czesci",        label: "Części" },
   { href: "/kondycja-finansowa", label: "Kondycja 🩺" },
   { href: "/import",        label: "Import" },
