@@ -23,6 +23,7 @@ interface PartOrder {
   quantity: number;
   vehicle_reg: string | null;
   estimated_cost_pln: number | null;
+  stock_checked: boolean;
   vendor: string | null;
   notes: string | null;
   status: Status;
@@ -265,6 +266,9 @@ function PendingList({
                   {o.vendor && <> · {o.vendor}</>}
                 </div>
                 <div className="text-xs text-slate-400 mt-0.5">Zgłosił {nameOf(o.submitted_by)} · {fmtDate(o.submitted_at)}</div>
+                {o.stock_checked && (
+                  <div className="text-xs text-emerald-600 mt-0.5">✓ Zweryfikowano brak towaru na magazynie</div>
+                )}
                 {o.notes && <div className="text-xs text-slate-500 mt-1 italic">„{o.notes}”</div>}
               </div>
               <div className="text-right shrink-0">
@@ -319,6 +323,7 @@ function OrderForm({ session, vehicles, onChanged }: { session: Session; vehicle
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [vehSearch, setVehSearch] = useState("");
+  const [stockChecked, setStockChecked] = useState(false);
 
   const filteredVehicles = vehicles.filter((v) => {
     const q = vehSearch.toLowerCase().trim();
@@ -328,7 +333,7 @@ function OrderForm({ session, vehicles, onChanged }: { session: Session; vehicle
 
   async function submit() {
     const qty = num(quantity);
-    if (!partName.trim() || qty == null || qty <= 0) return;
+    if (!partName.trim() || qty == null || qty <= 0 || !stockChecked) return;
     setSaving(true);
     const estimatedCost = num(cost);
     const { error } = await supabase.from("part_orders").insert({
@@ -340,11 +345,12 @@ function OrderForm({ session, vehicles, onChanged }: { session: Session; vehicle
       vendor: vendor.trim() || null,
       notes: notes.trim() || null,
       submitted_by: session.user.id,
+      stock_checked: stockChecked,
     });
     setSaving(false);
     if (!error) {
       notifyTeams({ kind: "submitted", partName: partName.trim(), quantity: qty, estimatedCostPln: estimatedCost, vehicleReg: vehicleReg || null, vendor: vendor.trim() || null, submittedByName: session.user.email });
-      setPartName(""); setPartNumber(""); setQuantity("1"); setVehicleReg(""); setCost(""); setVendor(""); setNotes("");
+      setPartName(""); setPartNumber(""); setQuantity("1"); setVehicleReg(""); setCost(""); setVendor(""); setNotes(""); setStockChecked(false);
       onChanged();
     } else {
       alert("Nie udało się zapisać: " + error.message);
@@ -380,7 +386,15 @@ function OrderForm({ session, vehicles, onChanged }: { session: Session; vehicle
           <textarea className="input-field" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} /></div>
       </div>
 
-      <button className="btn-primary" disabled={saving || !partName.trim() || num(quantity) == null} onClick={submit}>
+      <label className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-lg p-3 cursor-pointer">
+        <input type="checkbox" className="mt-0.5" checked={stockChecked} onChange={(e) => setStockChecked(e.target.checked)} />
+        <span className="text-sm text-amber-900">
+          <strong>Zweryfikowano brak towaru na magazynie warsztatu.</strong> Sprawdziłem/am fizycznie, że tej części nie ma
+          na stanie, zanim zgłosiłem/am zamówienie.
+        </span>
+      </label>
+
+      <button className="btn-primary" disabled={saving || !partName.trim() || num(quantity) == null || !stockChecked} onClick={submit}>
         {saving ? "Zgłaszam…" : "Zgłoś do akceptacji"}
       </button>
     </div>
