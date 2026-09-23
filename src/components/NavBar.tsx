@@ -60,6 +60,7 @@ const TRANSPORT_GROUPS: NavGroup[] = [
 const SERWIS_LINKS: NavLink[] = [
   { href: "/serwis",        label: "Serwis" },
   { href: "/serwis/zamowienia", label: "Zamówienia części" },
+  { href: "/czesci",        label: "Części (rozbiórka)" },
   { href: "/opony",         label: "Opony" },
   { href: "/checklista",    label: "Checklista" },
   { href: "/konfiguracja",  label: "⚙️" },
