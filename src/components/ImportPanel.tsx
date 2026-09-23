@@ -35,6 +35,7 @@ interface ImportResult {
 export default function ImportPanel() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [importType, setImportType] = useState<ImportType>("wydatki");
+  const [eurRate, setEurRate] = useState(4.27);
   const [status, setStatus] = useState<"idle" | "processing" | "done" | "error">("idle");
   const [result, setResult] = useState<ImportResult | null>(null);
   const [filename, setFilename] = useState<string>("");
@@ -85,7 +86,8 @@ export default function ImportPanel() {
               defval: null,
               range: 1, // start from row index 1 (second row) as header
             }),
-            file.name
+            file.name,
+            eurRate
           );
           break;
         case "trimble_fms": {
@@ -162,6 +164,17 @@ export default function ImportPanel() {
             <option value="ubezpieczenia">Rejestr ubezpieczeń</option>
           </select>
         </div>
+
+        {importType === "rejestr_transportow" && (
+          <div>
+            <label className="label">Kurs EUR/PLN (do przeliczenia frachtu w PLN)</label>
+            <input
+              type="number" step="0.01" className="input-field w-32"
+              value={eurRate}
+              onChange={e => setEurRate(parseFloat(e.target.value) || 4.27)}
+            />
+          </div>
+        )}
 
         {/* File picker */}
         <div>
@@ -597,7 +610,8 @@ function withDeAsterisked(row: Record<string, unknown>): Record<string, unknown>
 
 async function importRejestr(
   rows: Record<string, unknown>[],
-  _filename: string
+  _filename: string,
+  eurRate: number
 ): Promise<ImportResult> {
   let skipped = 0;
 
@@ -608,8 +622,16 @@ async function importRejestr(
       const orderNr = strOrNull(row["Nr pełny"] ?? row["Nr pelny"] ?? row["Nr"]);
       if (!orderNr) { skipped++; return null; }
 
+      // BUG NAPRAWIONY: fracht_eur zawierał wcześniej surową kwotę w oryginalnej
+      // walucie (np. PLN) zapisaną BEZ przeliczenia pod nazwą "fracht_eur" —
+      // sztucznie zawyżało to €/km dla zleceń w PLN. Teraz realnie przeliczamy.
       const frachtRaw = row["Fracht z walutą"] ?? row["Fracht z waluta"] ?? row["Fracht"];
-      const { amount: frachtEur, currency: frachtCurrency } = parseFracht(frachtRaw);
+      const { amount: frachtAmount, currency: frachtCurrency } = parseFracht(frachtRaw);
+      const frachtEur =
+        frachtAmount == null ? null :
+        frachtCurrency === "PLN" ? Math.round((frachtAmount / eurRate) * 100) / 100 :
+        frachtCurrency === "EUR" ? frachtAmount :
+        null; // inna/nierozpoznana waluta — nie zgadujemy, że to EUR
 
       return {
         order_number: orderNr,
