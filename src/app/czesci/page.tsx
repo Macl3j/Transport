@@ -5,7 +5,12 @@ import type { AuthSession as Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 
 // ── Typy ─────────────────────────────────────────────────────
-type JobStatus = "planowana" | "w_toku" | "zakonczona";
+// "wystawiony_w_calosci"/"sprzedany_w_calosci" to alternatywa dla ścieżki
+// rozbiórki — pojazd sprzedawany w całości (np. MAN/DAF z placu Karola),
+// nie na części. Śledzenie ceny/kupca idzie przez istniejący mechanizm
+// części z kategorią "caly_pojazd" (patrz CATEGORY_LABELS) — bez zmian w bazie,
+// kolumna status nie ma CHECK constraint.
+type JobStatus = "planowana" | "w_toku" | "zakonczona" | "wystawiony_w_calosci" | "sprzedany_w_calosci";
 type Ownership = "nieznany" | "leasing_aktywny" | "wykupiony" | "wlasny";
 type PartStatus = "do_zdemontowania" | "na_magazynie" | "wystawiona" | "zarezerwowana" | "sprzedana" | "zlomowana";
 type Category = "silnik" | "skrzynia" | "most" | "kabina" | "kola_opony" | "elektronika" | "caly_pojazd" | "reszta";
@@ -54,10 +59,16 @@ interface VehicleLite {
   buyout_eur: number | null;
 }
 
-const JOB_LABELS: Record<JobStatus, string> = { planowana: "Planowana", w_toku: "W toku", zakonczona: "Zakończona" };
+const JOB_LABELS: Record<JobStatus, string> = {
+  planowana: "Planowana (rozbiórka)", w_toku: "W toku (rozbiórka)", zakonczona: "Zakończona (rozbiórka)",
+  wystawiony_w_calosci: "Wystawiony w całości", sprzedany_w_calosci: "Sprzedany w całości",
+};
 const JOB_COLORS: Record<JobStatus, string> = {
   planowana: "bg-slate-100 text-slate-600", w_toku: "bg-amber-100 text-amber-700", zakonczona: "bg-emerald-100 text-emerald-700",
+  wystawiony_w_calosci: "bg-blue-100 text-blue-700", sprzedany_w_calosci: "bg-emerald-100 text-emerald-700",
 };
+// Statusy, w których pojazd jest sprzedawany jako całość, nie rozbierany na części
+const WHOLE_VEHICLE_STATUSES: JobStatus[] = ["wystawiony_w_calosci", "sprzedany_w_calosci"];
 const OWNERSHIP_LABELS: Record<Ownership, string> = {
   nieznany: "Nieznany", leasing_aktywny: "Leasing aktywny", wykupiony: "Wykupiony", wlasny: "Własny",
 };
@@ -385,7 +396,7 @@ function JobDetail({
       status: form.status,
       ownership_status: form.ownership_status,
       planned_date: form.planned_date || null,
-      done_date: form.status === "zakonczona" ? (job.done_date ?? todayStr()) : null,
+      done_date: (form.status === "zakonczona" || form.status === "sprzedany_w_calosci") ? (job.done_date ?? todayStr()) : null,
       supervisor: form.supervisor || null,
       estimated_value_pln: num(form.estimated_value_pln),
       notes: form.notes || null,
@@ -516,10 +527,20 @@ function JobDetail({
         <div className="bg-blue-50 rounded-lg p-2"><div className="text-[11px] text-slate-500 uppercase">Na stanie (wywoł.)</div><div className="font-semibold text-sm text-blue-700">{fmtPLN(remaining)}</div></div>
       </div>
 
+      {WHOLE_VEHICLE_STATUSES.includes(job.status) && parts.every((p) => p.category !== "caly_pojazd") && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-700">
+          Ten pojazd jest oznaczony jako sprzedawany w całości, nie na części. Dodaj jedną pozycję w kategorii
+          <strong> „Cały pojazd"</strong> z ceną wywoławczą — cena, kupujący i sprzedaż śledzone są tak samo jak dla części.
+        </div>
+      )}
+
       <div>
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Części ({parts.length})</h3>
-          <button className="text-xs text-blue-600 hover:underline" onClick={() => setShowAdd((v) => !v)}>+ Dodaj część</button>
+          <button className="text-xs text-blue-600 hover:underline" onClick={() => {
+            if (!showAdd && WHOLE_VEHICLE_STATUSES.includes(job.status)) setNp((prev) => ({ ...prev, category: "caly_pojazd" }));
+            setShowAdd((v) => !v);
+          }}>+ Dodaj część</button>
         </div>
 
         {showAdd && (
