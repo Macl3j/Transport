@@ -28,6 +28,19 @@ supabase db push
 
 ## Deploy (Vercel)
 
+### Źródło kontaktów w CRM
+
+Przed wdrożeniem interfejsu z filtrem „Źródło” zastosuj migrację
+`supabase/migrations/027_crm_contact_source.sql` w bazie używanej przez aplikację.
+Migracja dodaje źródło niezależne od statusu: `manual` (domyślne dla kontaktów
+dodawanych ręcznie) i `website` (automatycznie dla formularza B&M).
+Wcześniejsze zgłoszenia ze strony rozpoznaje po zapisach `crm_website_receipts`
+lub dokładnym nagłówku notatki integracji. Pozostałe kontakty otrzymują `manual`.
+Zmiana statusu i edycja danych kontaktu zachowują źródło.
+
+Po wdrożeniu sprawdź filtr „Źródło” wraz ze statusem w widoku listy i mapy,
+etykietę zgłoszenia ze strony oraz źródło w szczegółach kontaktu.
+
 1. Połącz repo GitHub z Vercel
 2. Dodaj zmienne środowiskowe w Vercel Dashboard:
    - `NEXT_PUBLIC_SUPABASE_URL`

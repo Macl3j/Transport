@@ -14,6 +14,7 @@ const REACH_PERIOD_LABELS: Record<ReachPeriod, string> = {
 
 // ── Typy ─────────────────────────────────────────────────────
 type ContactStatus = "prospekt" | "w_negocjacji" | "aktywny" | "stracony";
+type ContactSource = "website" | "manual";
 type ActivityType = "call" | "email" | "meeting" | "note";
 
 interface Contact {
@@ -25,6 +26,7 @@ interface Contact {
   email: string | null;
   routes: string | null;
   status: ContactStatus;
+  source: ContactSource;
   assigned_to: string | null;
   next_action_date: string | null;
   created_at: string;
@@ -63,6 +65,11 @@ interface Portal {
   notes: string | null;
   created_at: string;
 }
+
+const SOURCE_LABELS: Record<ContactSource, string> = {
+  website: "Strona WWW",
+  manual: "Dodany ręcznie",
+};
 
 const STATUS_LABELS: Record<ContactStatus, string> = {
   prospekt: "Prospekt",
@@ -223,6 +230,7 @@ function CrmDashboard({ session }: { session: Session }) {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | ContactStatus>("all");
+  const [sourceFilter, setSourceFilter] = useState<"all" | ContactSource>("all");
   const [view, setView] = useState<"lista" | "mapa">("lista");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
@@ -280,6 +288,7 @@ function CrmDashboard({ session }: { session: Session }) {
 
   const filtered = contacts.filter((c) => {
     if (statusFilter !== "all" && c.status !== statusFilter) return false;
+    if (sourceFilter !== "all" && c.source !== sourceFilter) return false;
     if (!search.trim()) return true;
     const s = search.toLowerCase();
     return (
@@ -375,6 +384,16 @@ function CrmDashboard({ session }: { session: Session }) {
               ))}
             </select>
           </div>
+          <div>
+            <label className="label" htmlFor="crm-source-filter">Źródło</label>
+            <select id="crm-source-filter" className="input-field bg-white" value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value as "all" | ContactSource)}>
+              <option value="all">Wszystkie</option>
+              {(Object.keys(SOURCE_LABELS) as ContactSource[]).map((s) => (
+                <option key={s} value={s}>{SOURCE_LABELS[s]}</option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
@@ -420,6 +439,9 @@ function CrmDashboard({ session }: { session: Session }) {
                         </span>
                       </div>
                       <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap gap-x-3">
+                        {c.source === "website" && (
+                          <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">Strona WWW</span>
+                        )}
                         {c.contact_person && <span>{c.contact_person}</span>}
                         {c.routes && <span>🛣️ {c.routes}</span>}
                       </div>
@@ -724,6 +746,7 @@ function ContactDetail({
       <div className="flex items-start justify-between">
         <div>
           <h2 className="text-lg font-bold text-slate-900">{contact.company_name}</h2>
+          <div className="text-xs text-slate-500 mb-1">Źródło: {SOURCE_LABELS[contact.source] ?? "Nie ustalono"}</div>
           <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_COLORS[contact.status]}`}>
             {STATUS_LABELS[contact.status]}
           </span>
