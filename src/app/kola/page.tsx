@@ -63,6 +63,9 @@ interface DispatcherPool {
 function fmtEur(n: number) {
   return n.toLocaleString("pl-PL", { maximumFractionDigits: 0 }) + " €";
 }
+function fmtEurPerKm(n: number) {
+  return n.toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €/km";
+}
 function fmtKm(n: number) {
   return n.toLocaleString("pl-PL", { maximumFractionDigits: 0 }) + " km";
 }
@@ -457,7 +460,7 @@ function CycleCard({ cycle, expanded, onToggle, dispatcherName }: {
           <div>
             <div className="text-xs text-gray-400">Fracht/dzień</div>
             <div className="text-sm font-medium">{fmtEur(cycle.revenuePerDay)}</div>
-            <div className="text-xs text-gray-400">{fmtEur(cycle.revenuePerKm)}/km</div>
+            <div className="text-xs text-gray-400">{fmtEurPerKm(cycle.revenuePerKm)}</div>
           </div>
         </div>
 
