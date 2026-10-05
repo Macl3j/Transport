@@ -203,7 +203,7 @@ function Dashboard({ session }: { session: Session }) {
           {tab === "zamow" && isSubmitter && (
             <OrderForm session={session} vehicles={vehicles} onChanged={() => { load(); setTab("do_zatwierdzenia"); }} />
           )}
-          {tab === "historia" && <HistoryTable items={orders} nameOf={nameOf} />}
+          {tab === "historia" && <HistoryTable items={orders} nameOf={nameOf} session={session} isApprover={isApprover} onChanged={load} />}
         </>
       )}
     </div>
@@ -401,7 +401,25 @@ function OrderForm({ session, vehicles, onChanged }: { session: Session; vehicle
   );
 }
 
-function HistoryTable({ items, nameOf }: { items: PartOrder[]; nameOf: (id: string | null) => string }) {
+function HistoryTable({
+  items, nameOf, session, isApprover, onChanged,
+}: {
+  items: PartOrder[]; nameOf: (id: string | null) => string; session: Session; isApprover: boolean; onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+
+  // Cofnięcie WŁASNEGO zatwierdzenia — zamówienie wraca do "oczekuje".
+  // Uprawnienie egzekwuje funkcja revoke_part_order_approval (migracja 028).
+  async function revoke(o: PartOrder) {
+    if (!confirm(`Cofnąć zatwierdzenie „${o.part_name}”? Zamówienie wróci do oczekujących na akceptację.`)) return;
+    setBusy(o.id);
+    const { error } = await supabase.rpc("revoke_part_order_approval", { p_order_id: o.id });
+    setBusy(null);
+    if (error) { alert("Nie udało się cofnąć: " + error.message); return; }
+    notifyTeams({ kind: "revoked", partName: o.part_name, quantity: o.quantity, estimatedCostPln: o.estimated_cost_pln, vehicleReg: o.vehicle_reg, vendor: o.vendor, submittedByName: nameOf(o.submitted_by), decidedByName: session.user.email });
+    onChanged();
+  }
+
   if (items.length === 0) return <div className="card text-sm text-slate-400 text-center py-8">Brak historii.</div>;
   return (
     <div className="card p-0 overflow-x-auto">
@@ -411,7 +429,7 @@ function HistoryTable({ items, nameOf }: { items: PartOrder[]; nameOf: (id: stri
             <th className="px-4 py-2">Część</th><th className="px-4 py-2 text-right">Ilość</th>
             <th className="px-4 py-2 text-right">Koszt</th><th className="px-4 py-2">Pojazd</th>
             <th className="px-4 py-2">Zgłosił</th><th className="px-4 py-2">Status</th>
-            <th className="px-4 py-2">Decyzja</th><th className="px-4 py-2">Uwaga</th>
+            <th className="px-4 py-2">Decyzja</th><th className="px-4 py-2">Uwaga</th><th className="px-4 py-2"></th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
@@ -425,6 +443,13 @@ function HistoryTable({ items, nameOf }: { items: PartOrder[]; nameOf: (id: stri
               <td className="px-4 py-2"><span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_COLORS[o.status]}`}>{STATUS_LABELS[o.status]}</span></td>
               <td className="px-4 py-2 text-xs text-slate-500">{o.decided_by ? `${nameOf(o.decided_by)} · ${fmtDate(o.decided_at)}` : "—"}</td>
               <td className="px-4 py-2 text-xs text-slate-500 italic">{o.decision_note ?? ""}</td>
+              <td className="px-4 py-2 text-right">
+                {isApprover && o.status === "zatwierdzona" && o.decided_by === session.user.id && (
+                  <button className="text-xs text-red-500 hover:underline whitespace-nowrap" disabled={busy === o.id} onClick={() => revoke(o)}>
+                    {busy === o.id ? "Cofam…" : "Cofnij zatwierdzenie"}
+                  </button>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>

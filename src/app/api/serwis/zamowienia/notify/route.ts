@@ -15,7 +15,7 @@ import { getAuthedUser } from "@/lib/crmAuth";
 // zgłaszania/akceptowania zamówień) — tylko loguje ostrzeżenie na serwerze.
 
 interface NotifyBody {
-  kind: "submitted" | "approved" | "rejected";
+  kind: "submitted" | "approved" | "rejected" | "revoked";
   partName: string;
   quantity: number;
   estimatedCostPln?: number | null;
@@ -26,8 +26,8 @@ interface NotifyBody {
   decisionNote?: string | null;
 }
 
-const VERB = { submitted: "🟠 Nowe zgłoszenie zamówienia części", approved: "✅ Zamówienie zatwierdzone", rejected: "🔴 Zamówienie odrzucone" };
-const COLOR = { submitted: "Warning", approved: "Good", rejected: "Attention" } as const;
+const VERB = { submitted: "🟠 Nowe zgłoszenie zamówienia części", approved: "✅ Zamówienie zatwierdzone", rejected: "🔴 Zamówienie odrzucone", revoked: "↩️ Zatwierdzenie cofnięte — zamówienie czeka ponownie na akceptację" };
+const COLOR = { submitted: "Warning", approved: "Good", rejected: "Attention", revoked: "Warning" } as const;
 
 export async function POST(req: Request) {
   try {
@@ -55,7 +55,7 @@ export async function POST(req: Request) {
     if (body.vehicleReg) facts.push({ title: "Pojazd", value: body.vehicleReg });
     if (body.vendor) facts.push({ title: "Dostawca", value: body.vendor });
     if (body.submittedByName) facts.push({ title: "Zgłosił", value: body.submittedByName });
-    if (body.kind !== "submitted" && body.decidedByName) facts.push({ title: "Decyzja", value: body.decidedByName });
+    if (body.kind !== "submitted" && body.decidedByName) facts.push({ title: body.kind === "revoked" ? "Cofnął" : "Decyzja", value: body.decidedByName });
     if (body.kind === "rejected" && body.decisionNote) facts.push({ title: "Powód odrzucenia", value: body.decisionNote });
 
     const adaptiveCard = {
