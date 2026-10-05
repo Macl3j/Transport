@@ -16,15 +16,47 @@ import {
 } from "@/lib/cycleAnalyzer";
 import { type CalcSettings } from "@/lib/calculator";
 
-// ─── Vehicle from Supabase ────────────────────────────────────
+// ─── Dispatcher & Vehicle types ───────────────────────────────
+interface Dispatcher {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  is_active: boolean;
+}
+
 interface Vehicle {
   reg: string;
+  brand?: string | null;
+  model?: string | null;
   vehicle_type: string | null;
+  dispatcher_id?: string | null;
   avg_fuel_l100: number | null;
   year_produced: number | null;
   leasing_eur_mo: number | null;
   insurance_eur_mo: number | null;
   service_cost_km: number | null;
+  is_active?: boolean;
+}
+
+interface DispatcherPool {
+  id: string;
+  name: string;
+  vehicles: string[];
+  ciagniki: string[];
+  naczepy: string[];
+  cycles: TruckCycle[];
+  routesCount: number;
+  totalKm: number;
+  frachtEur: number;
+  costEur: number;
+  marginEur: number;
+  marginPct: number;
+  avgMarginPerCyclePct: number;
+  losses: number;
+  lowMargin: number;
+  breakeven: number;
+  profitable: number;
 }
 
 // ─── Format helpers ────────────────────────────────────────────
@@ -53,8 +85,14 @@ function marginBorderColor(pct: number) {
   if (pct >= 0)  return "border-l-orange-500";
   return "border-l-red-500";
 }
+function marginColor(pct: number) {
+  if (pct >= 15) return "text-emerald-600";
+  if (pct >= 5)  return "text-amber-600";
+  if (pct >= 0)  return "text-orange-600";
+  return "text-red-600";
+}
 
-// ─── Parser utility functions (replicated from dyspozytorzy) ──
+// ─── Parser utility functions ─────────────────────────────────
 function parseFracht(s: string, eurRate: number): number {
   if (!s) return 0;
   const str = String(s).replace(/\s/g, "");
@@ -282,9 +320,9 @@ function FleetSummaryBar({ summary }: { summary: FleetCycleSummary }) {
     { label: "Śr. fracht/kółko", value: fmtEur(summary.avgFreightPerCycle) },
   ];
   return (
-    <div className="grid grid-cols-5 gap-3 mb-6">
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
       {stats.map(s => (
-        <div key={s.label} className="bg-white rounded-xl border border-gray-200 px-4 py-3">
+        <div key={s.label} className="bg-white rounded-xl border border-gray-200 px-4 py-3 shadow-sm">
           <div className="text-xs text-gray-500 mb-0.5">{s.label}</div>
           <div className={`text-lg font-bold ${
             s.highlight === false ? "text-red-600"
@@ -335,10 +373,11 @@ function RouteRow({ r }: { r: CycleRoute }) {
 }
 
 // ─── Cycle Card ────────────────────────────────────────────────
-function CycleCard({ cycle, expanded, onToggle }: {
+function CycleCard({ cycle, expanded, onToggle, dispatcherName }: {
   cycle: TruckCycle;
   expanded: boolean;
   onToggle: () => void;
+  dispatcherName?: string;
 }) {
   const borderColor = marginBorderColor(cycle.marginPct);
   return (
@@ -346,7 +385,7 @@ function CycleCard({ cycle, expanded, onToggle }: {
       {/* Header */}
       <button
         onClick={onToggle}
-        className="w-full text-left px-5 py-4 flex items-start gap-4"
+        className="w-full text-left px-5 py-4 flex items-start gap-4 flex-wrap md:flex-nowrap"
       >
         {/* Cycle index badge */}
         <div className="flex-shrink-0 w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center text-sm font-bold text-gray-700 mt-0.5">
@@ -354,22 +393,27 @@ function CycleCard({ cycle, expanded, onToggle }: {
         </div>
 
         {/* Dates + duration */}
-        <div className="flex-shrink-0">
+        <div className="flex-shrink-0 min-w-[140px]">
           <div className="text-sm font-semibold text-gray-800">
             {cycle.startDate} → {cycle.endDate}
           </div>
-          <div className="text-xs text-gray-500 mt-0.5">
-            {fmtDays(cycle.durationDays)} trasy
+          <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
+            <span>{fmtDays(cycle.durationDays)} trasy</span>
             {cycle.pauseDaysAfter > 0 && (
-              <span className="ml-2 text-blue-500">
+              <span className="text-blue-500">
                 + {fmtDays(cycle.pauseDaysAfter)} przerwa PL
+              </span>
+            )}
+            {dispatcherName && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.2 bg-blue-50 text-blue-700 border border-blue-200 rounded">
+                👤 {dispatcherName}
               </span>
             )}
           </div>
         </div>
 
         {/* Routes count */}
-        <div className="flex-shrink-0 text-center">
+        <div className="flex-shrink-0 text-center px-2">
           <div className="text-lg font-bold text-gray-800">{cycle.routeCount}</div>
           <div className="text-xs text-gray-400">tras</div>
           {cycle.flatRateCount > 0 && (
@@ -380,7 +424,7 @@ function CycleCard({ cycle, expanded, onToggle }: {
         </div>
 
         {/* Km */}
-        <div className="flex-shrink-0 text-center">
+        <div className="flex-shrink-0 text-center px-2">
           <div className="text-sm font-semibold text-gray-700">{fmtKm(cycle.totalKmLaden)}</div>
           <div className="text-xs text-gray-400">ładowne</div>
           {cycle.totalKmEmpty > 0 && (
@@ -389,7 +433,7 @@ function CycleCard({ cycle, expanded, onToggle }: {
         </div>
 
         {/* Revenue breakdown */}
-        <div className="flex-1 grid grid-cols-4 gap-3 ml-2">
+        <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-3 ml-2">
           <div>
             <div className="text-xs text-gray-400">Fracht</div>
             <div className="text-sm font-semibold">{fmtEur(cycle.totalFreightEur)}</div>
@@ -418,7 +462,7 @@ function CycleCard({ cycle, expanded, onToggle }: {
         </div>
 
         {/* Expand toggle */}
-        <div className="flex-shrink-0 text-gray-400 text-lg mt-1">
+        <div className="flex-shrink-0 text-gray-400 text-lg mt-1 ml-auto">
           {expanded ? "▲" : "▼"}
         </div>
       </button>
@@ -523,6 +567,7 @@ export default function KolaPage() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [dispatchers, setDispatchers] = useState<Dispatcher[]>([]);
   const [loading, setLoading] = useState(true);
   const [parsing, setParsing] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -543,6 +588,7 @@ export default function KolaPage() {
   const [showOpts, setShowOpts] = useState(false);
 
   // Filter & expand state
+  const [selectedDispatcher, setSelectedDispatcher] = useState<string>("all");
   const [selectedVehicle, setSelectedVehicle] = useState<string>("all");
   const [expandedCycles, setExpandedCycles] = useState<Set<string>>(new Set());
   const [expandAll, setExpandAll] = useState(false);
@@ -556,18 +602,46 @@ export default function KolaPage() {
     if (settings.plnEurRate)    setEurRate(settings.plnEurRate as number);
   }, [settings.fuelPriceEurL, settings.plnEurRate]);
 
-  // Load vehicles from Supabase
+  // Load vehicles & dispatchers from Supabase
   useEffect(() => {
-    supabase
-      .from("vehicles")
-      .select("reg,vehicle_type,avg_fuel_l100,year_produced,leasing_eur_mo,insurance_eur_mo,service_cost_km")
-      .eq("is_active", true)
-      .order("reg")
-      .then(({ data }) => {
-        setVehicles(data ?? []);
-        setLoading(false);
-      });
+    Promise.all([
+      supabase
+        .from("vehicles")
+        .select("reg,brand,model,vehicle_type,dispatcher_id,avg_fuel_l100,year_produced,leasing_eur_mo,insurance_eur_mo,service_cost_km,is_active")
+        .eq("is_active", true)
+        .order("reg"),
+      supabase
+        .from("dispatchers")
+        .select("id,name,email,phone,is_active")
+        .eq("is_active", true)
+        .order("name"),
+    ]).then(([{ data: vData }, { data: dData }]) => {
+      setVehicles(vData ?? []);
+      setDispatchers(dData ?? []);
+      setLoading(false);
+    });
   }, []);
+
+  // Map vehicle reg -> Vehicle & Dispatcher info
+  const vehMap = useMemo(() => {
+    const map = new Map<string, Vehicle>();
+    for (const v of vehicles) {
+      if (v.reg) map.set(v.reg.toUpperCase(), v);
+    }
+    return map;
+  }, [vehicles]);
+
+  const dispById = useMemo(() => {
+    const map = new Map<string, Dispatcher>();
+    for (const d of dispatchers) map.set(d.id, d);
+    return map;
+  }, [dispatchers]);
+
+  const getVehicleDispatcherName = (reg: string): string => {
+    const v = vehMap.get(reg.toUpperCase());
+    if (!v || !v.dispatcher_id) return "Nieprzypisany";
+    return dispById.get(v.dispatcher_id)?.name ?? "Nieznany";
+  };
 
   // Re-analyze when opts change (without re-parsing)
   useEffect(() => {
@@ -603,18 +677,146 @@ export default function KolaPage() {
     }
   }
 
-  // Filtered cycles for selected vehicle
-  const filteredCycles = useMemo(() =>
-    selectedVehicle === "all"
-      ? allCycles
-      : allCycles.filter(c => c.vehicleReg === selectedVehicle),
-  [allCycles, selectedVehicle]);
+  // Dispatcher pools & KPI calculations (similar to Dyspozytorzy tab)
+  const dispatcherPools = useMemo(() => {
+    if (dispatchers.length === 0 && vehicles.length === 0) return [];
+
+    // Group active vehicles by dispatcher
+    const vehByDisp = new Map<string, Vehicle[]>();
+    for (const v of vehicles) {
+      const key = v.dispatcher_id || "__unassigned__";
+      if (!vehByDisp.has(key)) vehByDisp.set(key, []);
+      vehByDisp.get(key)!.push(v);
+    }
+
+    // Vehicle reg to dispatcher map
+    const vehToDispId = new Map<string, string>();
+    for (const v of vehicles) {
+      if (v.reg) vehToDispId.set(v.reg.toUpperCase(), v.dispatcher_id || "__unassigned__");
+    }
+
+    // Group cycles by dispatcher
+    const cyclesByDisp = new Map<string, TruckCycle[]>();
+    for (const c of allCycles) {
+      const dispId = vehToDispId.get(c.vehicleReg.toUpperCase()) || "__unassigned__";
+      if (!cyclesByDisp.has(dispId)) cyclesByDisp.set(dispId, []);
+      cyclesByDisp.get(dispId)!.push(c);
+    }
+
+    const list: DispatcherPool[] = dispatchers.map(d => {
+      const myVehicles = vehByDisp.get(d.id) || [];
+      const myCycles = cyclesByDisp.get(d.id) || [];
+      const ciagniki = myVehicles.filter(v => v.vehicle_type === "ciągnik").map(v => v.reg);
+      const naczepy = myVehicles.filter(v => v.vehicle_type === "naczepa").map(v => v.reg);
+      const allVehRegs = myVehicles.map(v => v.reg);
+
+      const allRoutes = myCycles.flatMap(c => c.routes);
+      const frachtEur = myCycles.reduce((s, c) => s + c.totalFreightEur, 0);
+      const costEur = myCycles.reduce((s, c) => s + c.totalCostEur, 0);
+      const marginEur = myCycles.reduce((s, c) => s + c.marginEur, 0);
+      const marginPct = frachtEur > 0 ? (marginEur / frachtEur) * 100 : 0;
+      const totalKm = Math.round(myCycles.reduce((s, c) => s + c.totalKm, 0));
+      const avgMarginPerCyclePct = myCycles.length > 0
+        ? myCycles.reduce((s, c) => s + c.marginPct, 0) / myCycles.length
+        : 0;
+
+      const losses = allRoutes.filter(r => r.marginPct < 0).length;
+      const lowMargin = allRoutes.filter(r => r.marginPct >= 0 && r.marginPct < 5).length;
+      const breakeven = allRoutes.filter(r => r.marginPct >= 5 && r.marginPct < 15).length;
+      const profitable = allRoutes.filter(r => r.marginPct >= 15).length;
+
+      return {
+        id: d.id,
+        name: d.name,
+        vehicles: allVehRegs,
+        ciagniki,
+        naczepy,
+        cycles: myCycles,
+        routesCount: allRoutes.length,
+        totalKm,
+        frachtEur,
+        costEur,
+        marginEur,
+        marginPct,
+        avgMarginPerCyclePct,
+        losses,
+        lowMargin,
+        breakeven,
+        profitable,
+      };
+    });
+
+    // Unassigned dispatcher if any
+    const unassignedVeh = vehByDisp.get("__unassigned__") || [];
+    const unassignedCycles = cyclesByDisp.get("__unassigned__") || [];
+    if (unassignedVeh.length > 0 || unassignedCycles.length > 0) {
+      const ciagniki = unassignedVeh.filter(v => v.vehicle_type === "ciągnik").map(v => v.reg);
+      const naczepy = unassignedVeh.filter(v => v.vehicle_type === "naczepa").map(v => v.reg);
+      const allRoutes = unassignedCycles.flatMap(c => c.routes);
+      const frachtEur = unassignedCycles.reduce((s, c) => s + c.totalFreightEur, 0);
+      const costEur = unassignedCycles.reduce((s, c) => s + c.totalCostEur, 0);
+      const marginEur = unassignedCycles.reduce((s, c) => s + c.marginEur, 0);
+      const marginPct = frachtEur > 0 ? (marginEur / frachtEur) * 100 : 0;
+      const totalKm = Math.round(unassignedCycles.reduce((s, c) => s + c.totalKm, 0));
+      const avgMarginPerCyclePct = unassignedCycles.length > 0
+        ? unassignedCycles.reduce((s, c) => s + c.marginPct, 0) / unassignedCycles.length
+        : 0;
+
+      list.push({
+        id: "__unassigned__",
+        name: "⚠ Nieprzypisane",
+        vehicles: unassignedVeh.map(v => v.reg),
+        ciagniki,
+        naczepy,
+        cycles: unassignedCycles,
+        routesCount: allRoutes.length,
+        totalKm,
+        frachtEur,
+        costEur,
+        marginEur,
+        marginPct,
+        avgMarginPerCyclePct,
+        losses: allRoutes.filter(r => r.marginPct < 0).length,
+        lowMargin: allRoutes.filter(r => r.marginPct >= 0 && r.marginPct < 5).length,
+        breakeven: allRoutes.filter(r => r.marginPct >= 5 && r.marginPct < 15).length,
+        profitable: allRoutes.filter(r => r.marginPct >= 15).length,
+      });
+    }
+
+    return list;
+  }, [dispatchers, vehicles, allCycles]);
 
   // Unique vehicles from cycles
-  const vehicleList = useMemo(() => {
+  const vehicleListAll = useMemo(() => {
     const set = new Set(allCycles.map(c => c.vehicleReg));
     return Array.from(set).sort();
   }, [allCycles]);
+
+  // Filtered vehicles based on selected dispatcher
+  const vehicleListFiltered = useMemo(() => {
+    if (selectedDispatcher === "all") return vehicleListAll;
+    const pool = dispatcherPools.find(p => p.id === selectedDispatcher);
+    if (!pool) return vehicleListAll;
+    // Show vehicles that either are in pool or have cycles matching this dispatcher
+    const poolVehs = new Set(pool.vehicles.map(v => v.toUpperCase()));
+    return vehicleListAll.filter(v => poolVehs.has(v.toUpperCase()));
+  }, [selectedDispatcher, dispatcherPools, vehicleListAll]);
+
+  // Filtered cycles based on selected dispatcher and vehicle
+  const filteredCycles = useMemo(() => {
+    let list = allCycles;
+    if (selectedDispatcher !== "all") {
+      const pool = dispatcherPools.find(p => p.id === selectedDispatcher);
+      if (pool) {
+        const poolVehs = new Set(pool.vehicles.map(v => v.toUpperCase()));
+        list = list.filter(c => poolVehs.has(c.vehicleReg.toUpperCase()));
+      }
+    }
+    if (selectedVehicle !== "all") {
+      list = list.filter(c => c.vehicleReg === selectedVehicle);
+    }
+    return list;
+  }, [allCycles, selectedDispatcher, selectedVehicle, dispatcherPools]);
 
   // Toggle expand
   function toggleCycle(key: string) {
@@ -640,7 +842,7 @@ export default function KolaPage() {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center text-gray-500">
-        Ładowanie danych pojazdów…
+        Ładowanie danych pojazdów i dyspozytorów…
       </div>
     );
   }
@@ -650,11 +852,11 @@ export default function KolaPage() {
       <div className="max-w-screen-xl mx-auto px-6 py-8">
 
         {/* Page header */}
-        <div className="flex items-start justify-between mb-6">
+        <div className="flex items-start justify-between mb-6 flex-wrap gap-4">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Analiza kółek</h1>
             <p className="text-gray-500 text-sm mt-1">
-              Cykl od wyjazdu z Polski do powrotu — pełne rozliczenie okresu z flat-rate orders
+              Cykl od wyjazdu z Polski do powrotu — pełne rozliczenie okresu z podziałem na pule dyspozytorów
             </p>
           </div>
 
@@ -662,14 +864,14 @@ export default function KolaPage() {
           <div className="flex items-center gap-3">
             <button
               onClick={() => setShowOpts(v => !v)}
-              className="px-3 py-2 text-sm border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50"
+              className="px-3 py-2 text-sm border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-100 bg-white shadow-sm"
             >
               ⚙ Opcje
             </button>
             <button
               onClick={() => fileRef.current?.click()}
               disabled={parsing}
-              className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              className="px-4 py-2 text-sm bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 shadow-sm transition-colors"
             >
               {parsing ? "Analizuję…" : "↑ Wgraj TMS"}
             </button>
@@ -702,7 +904,7 @@ export default function KolaPage() {
             <div className="text-5xl mb-4">🔄</div>
             <div className="text-lg font-medium text-gray-700">Wgraj plik TMS</div>
             <div className="text-sm text-gray-400 mt-1">
-              Eksport tras z systemu TMS (.xls / .xlsx)
+              Eksport tras z systemu TMS (.xls / .xlsx) — zobaczysz rozliczenie kółek oraz przypisanie do dyspozytorów
             </div>
           </div>
         )}
@@ -711,72 +913,295 @@ export default function KolaPage() {
         {summary && allCycles.length > 0 && (
           <>
             {/* File info */}
-            <div className="text-xs text-gray-400 mb-4">
-              {fileName && <span>Plik: <strong>{fileName}</strong> · </span>}
-              <span>{rawRoutes.length} tras → {allCycles.length} kółek ({vehicleList.length} pojazdów)</span>
+            <div className="text-xs text-gray-400 mb-4 flex items-center justify-between flex-wrap gap-2">
+              <div>
+                {fileName && <span>Plik: <strong>{fileName}</strong> · </span>}
+                <span>{rawRoutes.length} tras → {allCycles.length} kółek ({vehicleListAll.length} aktywnych pojazdów)</span>
+              </div>
+              <div className="text-xs text-slate-500">
+                {dispatchers.length} dyspozytorów we flocie
+              </div>
             </div>
 
             {/* Fleet summary KPIs */}
             <FleetSummaryBar summary={summary} />
 
-            {/* Vehicle filter tabs */}
-            <div className="flex items-center gap-2 mb-4 flex-wrap">
+            {/* ─── Dyspozytorzy — Karty Puli Samochodów (jak w zakładce Dyspozytorzy) ─── */}
+            <div className="mb-6">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm font-bold text-gray-800 uppercase tracking-wide">
+                    Pule dyspozytorów i wyniki kółek
+                  </h2>
+                  <span className="text-xs text-gray-400">
+                    (kliknij kartę aby przefiltrować kółka danego dyspozytora)
+                  </span>
+                </div>
+                {selectedDispatcher !== "all" && (
+                  <button
+                    onClick={() => {
+                      setSelectedDispatcher("all");
+                      setSelectedVehicle("all");
+                    }}
+                    className="text-xs font-semibold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-md transition-colors"
+                  >
+                    ✕ Pokaż wszystkich ({allCycles.length} kółek)
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {dispatcherPools.map(d => {
+                  const isSelected = selectedDispatcher === d.id;
+                  const hasLosses = d.losses > 0;
+                  const activeCyclesInFile = d.cycles.length;
+
+                  return (
+                    <div
+                      key={d.id}
+                      onClick={() => {
+                        setSelectedDispatcher(isSelected ? "all" : d.id);
+                        setSelectedVehicle("all");
+                      }}
+                      className={`bg-white rounded-xl border p-4 cursor-pointer transition-all ${
+                        isSelected
+                          ? "ring-2 ring-blue-500 shadow-md border-blue-500"
+                          : "border-gray-200 hover:shadow hover:border-gray-300"
+                      } ${
+                        hasLosses
+                          ? "border-l-4 border-l-red-500"
+                          : d.marginPct >= 15
+                          ? "border-l-4 border-l-emerald-500"
+                          : "border-l-4 border-l-amber-500"
+                      }`}
+                    >
+                      {/* Top row: Name, badges & margin % */}
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <h3 className="font-bold text-slate-800">{d.name}</h3>
+                            {isSelected && (
+                              <span className="text-[10px] bg-blue-600 text-white font-semibold px-1.5 py-0.5 rounded">
+                                Aktywny filtr
+                              </span>
+                            )}
+                          </div>
+
+                          {/* CIĄ / NAC badges */}
+                          <div className="flex gap-1 mt-1 flex-wrap items-center">
+                            {d.ciagniki.length > 0 && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-blue-100 text-blue-700">
+                                🚛 {d.ciagniki.length} CIĄ
+                              </span>
+                            )}
+                            {d.naczepy.length > 0 && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-slate-100 text-slate-600">
+                                🚌 {d.naczepy.length} NAC
+                              </span>
+                            )}
+                            <span className="text-[10px] text-slate-400">
+                              {d.routesCount} tras · {activeCyclesInFile} kółek · {d.totalKm.toLocaleString("pl-PL")} km
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="text-right">
+                          <div className={`text-2xl font-black ${marginColor(d.marginPct)}`}>
+                            {fmtPct(d.marginPct)}
+                          </div>
+                          <div className="text-xs text-slate-400">marża</div>
+                        </div>
+                      </div>
+
+                      {/* 3 stats boxes */}
+                      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                        <div className="bg-slate-50 rounded-lg py-2">
+                          <div className="text-sm font-bold text-slate-800">{fmtEur(d.frachtEur)}</div>
+                          <div className="text-xs text-slate-400">fracht</div>
+                        </div>
+                        <div className="bg-slate-50 rounded-lg py-2">
+                          <div className={`text-sm font-bold ${marginColor(d.marginPct)}`}>
+                            {fmtEur(d.marginEur)}
+                          </div>
+                          <div className="text-xs text-slate-400">marża EUR</div>
+                        </div>
+                        <div className="bg-slate-50 rounded-lg py-2">
+                          <div className="text-sm font-bold text-slate-800">
+                            {d.cycles.length > 0 ? fmtPct(d.avgMarginPerCyclePct) : "—"}
+                          </div>
+                          <div className="text-xs text-slate-400">śr./kółko</div>
+                        </div>
+                      </div>
+
+                      {/* Mini bar status badges */}
+                      <div className="mt-3 flex gap-1 text-xs flex-wrap items-center">
+                        {d.profitable > 0 && (
+                          <div className="bg-emerald-500 text-white rounded px-1.5 py-0.5 font-medium">
+                            ✓ {d.profitable}
+                          </div>
+                        )}
+                        {d.breakeven > 0 && (
+                          <div className="bg-amber-400 text-white rounded px-1.5 py-0.5 font-medium">
+                            ~ {d.breakeven}
+                          </div>
+                        )}
+                        {d.lowMargin > 0 && (
+                          <div className="bg-orange-400 text-white rounded px-1.5 py-0.5 font-medium">
+                            ↓ {d.lowMargin}
+                          </div>
+                        )}
+                        {d.losses > 0 && (
+                          <div className="bg-red-600 text-white rounded px-1.5 py-0.5 font-bold">
+                            ✗ {d.losses} STRAT
+                          </div>
+                        )}
+                        {d.routesCount === 0 && (
+                          <span className="text-[11px] text-slate-400 italic">Brak tras w pliku</span>
+                        )}
+                      </div>
+
+                      {/* Pula samochodów dyspozytora (chips) */}
+                      {d.vehicles.length > 0 && (
+                        <div className="mt-3 pt-2.5 border-t border-gray-100">
+                          <div className="text-[11px] text-slate-500 font-medium mb-1.5 flex items-center justify-between">
+                            <span>Pula samochodów ({d.vehicles.length}):</span>
+                            <span className="text-[10px] text-slate-400 font-normal">
+                              {d.vehicles.filter(v => vehicleListAll.includes(v)).length} aktywnych w pliku
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap gap-1">
+                            {d.vehicles.map(v => {
+                              const hasCycles = vehicleListAll.includes(v);
+                              return (
+                                <span
+                                  key={v}
+                                  className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-medium transition-colors ${
+                                    hasCycles
+                                      ? "bg-blue-50 text-blue-700 border border-blue-200"
+                                      : "bg-gray-100 text-gray-400 border border-transparent"
+                                  }`}
+                                  title={hasCycles ? "Posiada zarejestrowane trasy w pliku TMS" : "Brak tras w bieżącym pliku"}
+                                >
+                                  {v}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* ─── Vehicle filter tabs ─── */}
+            <div className="flex items-center gap-2 mb-4 flex-wrap bg-white p-3 rounded-xl border border-gray-200">
+              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide mr-1">
+                Pojazd:
+              </span>
               <button
                 onClick={() => setSelectedVehicle("all")}
                 className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                   selectedVehicle === "all"
-                    ? "bg-blue-600 text-white"
-                    : "bg-white border border-gray-300 text-gray-600 hover:bg-gray-50"
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
                 }`}
               >
-                Wszystkie ({allCycles.length})
+                Wszystkie {selectedDispatcher !== "all" ? "w puli" : ""} ({filteredCycles.length} kółek)
               </button>
-              {vehicleList.map(v => {
+
+              {vehicleListFiltered.map(v => {
                 const count = allCycles.filter(c => c.vehicleReg === v).length;
+                const dispName = getVehicleDispatcherName(v);
                 return (
                   <button
                     key={v}
                     onClick={() => setSelectedVehicle(v)}
-                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
                       selectedVehicle === v
-                        ? "bg-blue-600 text-white"
-                        : "bg-white border border-gray-300 text-gray-600 hover:bg-gray-50"
+                        ? "bg-blue-600 text-white shadow-sm"
+                        : "bg-gray-100 text-gray-700 hover:bg-gray-200"
                     }`}
                   >
-                    {v} ({count})
+                    <span>{v}</span>
+                    <span className={`text-xs px-1.5 py-0.2 rounded-full ${
+                      selectedVehicle === v ? "bg-blue-700 text-white" : "bg-gray-200 text-gray-600"
+                    }`}>
+                      {count}
+                    </span>
+                    {selectedDispatcher === "all" && dispName !== "Nieprzypisany" && (
+                      <span className={`text-[10px] ${selectedVehicle === v ? "text-blue-200" : "text-gray-400"}`}>
+                        · {dispName.split(" ")[0]}
+                      </span>
+                    )}
                   </button>
                 );
               })}
+
               <div className="ml-auto">
                 <button
                   onClick={toggleExpandAll}
-                  className="text-xs text-blue-600 hover:underline"
+                  className="text-xs font-medium text-blue-600 hover:text-blue-800 bg-blue-50 px-2.5 py-1.5 rounded-lg transition-colors"
                 >
-                  {expandAll ? "Zwiń wszystkie" : "Rozwiń wszystkie"}
+                  {expandAll ? "▲ Zwiń wszystkie" : "▼ Rozwiń wszystkie"}
                 </button>
               </div>
             </div>
 
-            {/* Cycles list */}
+            {/* ─── Cycles list ─── */}
             <div>
-              {/* Group by vehicle */}
               {selectedVehicle === "all" ? (
-                vehicleList.map(v => {
+                vehicleListFiltered.map(v => {
                   const vCycles = filteredCycles.filter(c => c.vehicleReg === v);
+                  if (vCycles.length === 0) return null;
+
                   const vFreight = vCycles.reduce((s, c) => s + c.totalFreightEur, 0);
                   const vMargin  = vCycles.reduce((s, c) => s + c.marginEur, 0);
                   const vMarginPct = vFreight > 0 ? (vMargin / vFreight) * 100 : 0;
+                  const vehData = vehMap.get(v.toUpperCase());
+                  const dispName = getVehicleDispatcherName(v);
+
                   return (
                     <div key={v} className="mb-8">
-                      <div className="flex items-center gap-3 mb-3">
-                        <h2 className="text-base font-bold text-gray-800">{v}</h2>
-                        <span className="text-xs text-gray-500">
-                          {vCycles.length} kółek · {fmtEur(vFreight)} fracht ·{" "}
+                      {/* Vehicle Header with Dispatcher Assignment */}
+                      <div className="flex items-center justify-between flex-wrap gap-2 mb-3 bg-white p-3 rounded-xl border border-gray-200 shadow-sm">
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <div className="flex items-center gap-2">
+                            <span className="text-lg">🚛</span>
+                            <h2 className="text-base font-bold text-gray-800 font-mono">{v}</h2>
+                            {vehData?.brand && (
+                              <span className="text-xs text-gray-500 font-normal">
+                                ({vehData.brand} {vehData.model})
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Przypisanie do dyspozytora */}
+                          <div className="flex items-center gap-1.5">
+                            <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                              <span>👤</span>
+                              <span>Dyspozytor: {dispName}</span>
+                            </span>
+                            {vehData?.vehicle_type && (
+                              <span className="text-[11px] text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full capitalize">
+                                {vehData.vehicle_type}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="text-xs text-gray-500 flex items-center gap-2">
+                          <span>{vCycles.length} kółek</span>
+                          <span>·</span>
+                          <span>{fmtEur(vFreight)} fracht</span>
+                          <span>·</span>
                           <span className={marginTextColor(vMarginPct)}>
-                            {fmtPct(vMarginPct)}
+                            {fmtPct(vMarginPct)} marża ({fmtEur(vMargin)})
                           </span>
-                        </span>
+                        </div>
                       </div>
+
                       {vCycles.map(c => {
                         const key = `${c.vehicleReg}-${c.cycleIndex}`;
                         return (
@@ -785,6 +1210,7 @@ export default function KolaPage() {
                             cycle={c}
                             expanded={expandedCycles.has(key)}
                             onToggle={() => toggleCycle(key)}
+                            dispatcherName={dispName}
                           />
                         );
                       })}
@@ -794,12 +1220,14 @@ export default function KolaPage() {
               ) : (
                 filteredCycles.map(c => {
                   const key = `${c.vehicleReg}-${c.cycleIndex}`;
+                  const dispName = getVehicleDispatcherName(c.vehicleReg);
                   return (
                     <CycleCard
                       key={key}
                       cycle={c}
                       expanded={expandedCycles.has(key)}
                       onToggle={() => toggleCycle(key)}
+                      dispatcherName={dispName}
                     />
                   );
                 })
