@@ -12,9 +12,18 @@ import { supabase } from "@/lib/supabase";
 // finance_approval_roles (migracja 023), nie na sztywno w kodzie.
 // ══════════════════════════════════════════════════════════════
 
-type Status = "oczekuje" | "zatwierdzona" | "odrzucona";
+type Status = "oczekuje" | "czesciowo_zaakceptowana" | "zatwierdzona" | "odrzucona";
 type Source = "rejestr" | "reczne";
 type Role = "submitter" | "approver" | "viewer";
+
+interface PartialApproval {
+  id: string;
+  payment_approval_id: string;
+  amount_pln: number;
+  note: string | null;
+  decided_by: string;
+  created_at: string;
+}
 
 interface Approval {
   id: string;
@@ -43,12 +52,22 @@ interface CostInvoice {
 }
 interface Profile { id: string; display_name: string | null; email: string | null }
 
-const STATUS_LABELS: Record<Status, string> = { oczekuje: "Oczekuje", zatwierdzona: "Zatwierdzona", odrzucona: "Odrzucona" };
-const STATUS_COLORS: Record<Status, string> = {
-  oczekuje: "bg-amber-100 text-amber-700", zatwierdzona: "bg-emerald-100 text-emerald-700", odrzucona: "bg-red-100 text-red-700",
+const STATUS_LABELS: Record<Status, string> = {
+  oczekuje: "Oczekuje",
+  czesciowo_zaakceptowana: "Częściowo zaakceptowana",
+  zatwierdzona: "Zatwierdzona",
+  odrzucona: "Odrzucona",
 };
-const fmtPln = (n: number) => Math.round(n).toLocaleString("pl-PL") + " PLN";
+const STATUS_COLORS: Record<Status, string> = {
+  oczekuje: "bg-amber-100 text-amber-700",
+  czesciowo_zaakceptowana: "bg-blue-100 text-blue-700",
+  zatwierdzona: "bg-emerald-100 text-emerald-700",
+  odrzucona: "bg-red-100 text-red-700",
+};
+const fmtPln = (n: number) =>
+  n.toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " PLN";
 const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleDateString("pl-PL") : "—");
+const fmtDateTime = (s: string | null) => (s ? new Date(s).toLocaleString("pl-PL", { dateStyle: "short", timeStyle: "short" }) : "—");
 const num = (s: string) => { const n = parseFloat(s.replace(",", ".")); return isNaN(n) ? null : n; };
 
 // ── Bramka logowania — ten sam login co CRM / windykacja / części ──
@@ -118,6 +137,7 @@ function AkceptacjeDashboard({ session }: { session: Session }) {
   const [roles, setRoles] = useState<Role[]>([]);
   const [rolesLoaded, setRolesLoaded] = useState(false);
   const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [partials, setPartials] = useState<Record<string, PartialApproval[]>>({});
   const [invoices, setInvoices] = useState<CostInvoice[]>([]);
   const [profiles, setProfiles] = useState<Record<string, Profile>>({});
   const [loading, setLoading] = useState(true);
@@ -130,9 +150,10 @@ function AkceptacjeDashboard({ session }: { session: Session }) {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [r, a, inv, p] = await Promise.all([
+    const [r, a, partRes, inv, p] = await Promise.all([
       supabase.from("finance_approval_roles").select("role").eq("user_id", session.user.id),
       supabase.from("payment_approvals").select("*").order("submitted_at", { ascending: false }),
+      supabase.from("payment_partial_approvals").select("*").order("created_at", { ascending: true }),
       // Tabela ma tysiące wierszy (głównie już spłacone) — bez filtra i sortowania
       // po stronie zapytania samo .limit(1000) potrafi trafić w same opłacone
       // i lista "do wyboru" wychodzi pusta mimo realnych niezapłaconych faktur.
@@ -147,12 +168,25 @@ function AkceptacjeDashboard({ session }: { session: Session }) {
     const err = r.error ?? a.error;
     if (err) {
       setLoadError(err.message.includes("schema cache") || err.message.includes("does not exist")
-        ? "Brak tabel modułu — uruchom migrację 023_payment_approvals.sql w Supabase Studio."
+        ? "Brak tabel modułu — uruchom migrację 023_payment_approvals.sql oraz 029_payment_partial_approvals.sql w Supabase Studio."
         : err.message);
     } else setLoadError(null);
     setRoles(((r.data ?? []) as { role: Role }[]).map((x) => x.role));
     setRolesLoaded(true);
     setApprovals((a.data ?? []) as Approval[]);
+
+    // Grupowanie cząstkowych akceptacji wg payment_approval_id
+    const partMap: Record<string, PartialApproval[]> = {};
+    if (partRes.data) {
+      (partRes.data as PartialApproval[]).forEach((item) => {
+        if (!partMap[item.payment_approval_id]) {
+          partMap[item.payment_approval_id] = [];
+        }
+        partMap[item.payment_approval_id].push(item);
+      });
+    }
+    setPartials(partMap);
+
     setInvoices((inv.data ?? []) as CostInvoice[]);
     const pm: Record<string, Profile> = {};
     ((p.data ?? []) as Profile[]).forEach((x) => (pm[x.id] = x));
@@ -167,7 +201,8 @@ function AkceptacjeDashboard({ session }: { session: Session }) {
     i.status_splaty !== "Spłacony" && (i.pozostalo_do_zaplaty_pln ?? i.brutto_pln ?? 0) > 0.01
   ), [invoices]);
 
-  const pending = approvals.filter((a) => a.status === "oczekuje");
+  // Pozycja nie znika z listy "do zatwierdzenia", dopóki nie zostanie w pełni zaakceptowana (lub odrzucona)
+  const pending = approvals.filter((a) => a.status === "oczekuje" || a.status === "czesciowo_zaakceptowana");
   const myPendingSubmissions = pending.filter((a) => a.submitted_by === session.user.id);
 
   if (rolesLoaded && !hasAnyRole && !loadError) {
@@ -188,7 +223,7 @@ function AkceptacjeDashboard({ session }: { session: Session }) {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Akceptacja płatności</h1>
           <p className="text-slate-500 text-sm mt-1">
-            {pending.length} oczekujących · Twoja rola: {roles.map((r) => ({ submitter: "zgłaszający", approver: "zatwierdzający", viewer: "obserwator" }[r])).join(", ") || "—"}
+            {pending.length} oczekujących / w trakcie · Twoja rola: {roles.map((r) => ({ submitter: "zgłaszający", approver: "zatwierdzający", viewer: "obserwator" }[r])).join(", ") || "—"}
           </p>
         </div>
         <div className="flex items-center gap-3 text-sm">
@@ -221,6 +256,7 @@ function AkceptacjeDashboard({ session }: { session: Session }) {
           {tab === "do_zatwierdzenia" && (
             <PendingList
               items={pending}
+              partials={partials}
               isApprover={isApprover}
               nameOf={nameOf}
               session={session}
@@ -231,7 +267,7 @@ function AkceptacjeDashboard({ session }: { session: Session }) {
           {tab === "zglos" && isSubmitter && (
             <SubmitForm session={session} invoices={unpaidInvoices} onChanged={() => { load(); setTab("do_zatwierdzenia"); }} />
           )}
-          {tab === "historia" && <HistoryTable items={approvals} nameOf={nameOf} />}
+          {tab === "historia" && <HistoryTable items={approvals} partials={partials} nameOf={nameOf} />}
         </>
       )}
     </div>
@@ -239,31 +275,128 @@ function AkceptacjeDashboard({ session }: { session: Session }) {
 }
 
 function PendingList({
-  items, isApprover, nameOf, session, myPendingSubmissions, onChanged,
+  items, partials, isApprover, nameOf, session, myPendingSubmissions, onChanged,
 }: {
-  items: Approval[]; isApprover: boolean; nameOf: (id: string | null) => string; session: Session;
+  items: Approval[]; partials: Record<string, PartialApproval[]>; isApprover: boolean;
+  nameOf: (id: string | null) => string; session: Session;
   myPendingSubmissions: Approval[]; onChanged: () => void;
 }) {
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [rejectNote, setRejectNote] = useState("");
+  const [partialModal, setPartialModal] = useState<Approval | null>(null);
+  const [partialAmount, setPartialAmount] = useState("");
+  const [partialNote, setPartialNote] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
 
-  async function approve(a: Approval) {
+  async function approveFull(a: Approval) {
     setBusy(a.id);
     const { error } = await supabase.from("payment_approvals")
-      .update({ status: "zatwierdzona", decided_by: session.user.id, decided_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .update({
+        status: "zatwierdzona",
+        decided_by: session.user.id,
+        decided_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
       .eq("id", a.id);
     setBusy(null);
     if (!error) {
       notifyTeams({ kind: "approved", vendor: a.vendor, amountPln: a.amount_pln, title: a.title, decidedByName: session.user.email });
       onChanged();
+    } else {
+      alert("Błąd zatwierdzania: " + error.message);
     }
   }
+
+  async function submitPartial() {
+    if (!partialModal) return;
+    const amt = num(partialAmount);
+    if (amt == null || amt <= 0) {
+      alert("Wpisz poprawną kwotę większą od zera.");
+      return;
+    }
+    const currentPartials = partials[partialModal.id] ?? [];
+    const alreadyApproved = currentPartials.reduce((s, p) => s + p.amount_pln, 0);
+    const remaining = Math.max(0, partialModal.amount_pln - alreadyApproved);
+
+    if (amt > remaining + 0.001) {
+      alert(`Kwota częściowa (${fmtPln(amt)}) nie może przekraczać pozostałej kwoty do akceptacji (${fmtPln(remaining)}).`);
+      return;
+    }
+
+    setBusy(partialModal.id);
+
+    // 1. Zapis wpisu do tabeli payment_partial_approvals
+    const { error: partErr } = await supabase.from("payment_partial_approvals").insert({
+      payment_approval_id: partialModal.id,
+      amount_pln: amt,
+      note: partialNote.trim() || null,
+      decided_by: session.user.id,
+    });
+
+    if (partErr) {
+      setBusy(null);
+      alert("Błąd zapisu akceptacji częściowej: " + partErr.message + "\nUpewnij się, że uruchomiono migrację 029.");
+      return;
+    }
+
+    // 2. Sprawdzenie, czy po tej transzy wydatek został już w pełni zaakceptowany
+    const newRemaining = remaining - amt;
+    const isFullyApproved = newRemaining <= 0.01;
+    const newStatus: Status = isFullyApproved ? "zatwierdzona" : "czesciowo_zaakceptowana";
+
+    const { error: upErr } = await supabase.from("payment_approvals")
+      .update({
+        status: newStatus,
+        decided_by: session.user.id,
+        decided_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", partialModal.id);
+
+    setBusy(null);
+
+    if (upErr) {
+      alert("Zapisano wpis częściowy, ale wystąpił błąd aktualizacji statusu: " + upErr.message);
+    } else {
+      if (isFullyApproved) {
+        notifyTeams({
+          kind: "approved",
+          vendor: partialModal.vendor,
+          amountPln: partialModal.amount_pln,
+          title: partialModal.title,
+          decidedByName: session.user.email,
+          decisionNote: `Całkowite rozliczenie po transzach (ostatnia transza: ${fmtPln(amt)}${partialNote ? ` - ${partialNote.trim()}` : ""})`,
+        });
+      } else {
+        notifyTeams({
+          kind: "partial_approved",
+          vendor: partialModal.vendor,
+          amountPln: partialModal.amount_pln,
+          partialAmountPln: amt,
+          remainingAmountPln: newRemaining,
+          title: partialModal.title,
+          decidedByName: session.user.email,
+          decisionNote: partialNote.trim() || null,
+        });
+      }
+      setPartialModal(null);
+      setPartialAmount("");
+      setPartialNote("");
+      onChanged();
+    }
+  }
+
   async function reject(a: Approval) {
     if (!rejectNote.trim()) return;
     setBusy(a.id);
     const { error } = await supabase.from("payment_approvals")
-      .update({ status: "odrzucona", decided_by: session.user.id, decided_at: new Date().toISOString(), decision_note: rejectNote.trim(), updated_at: new Date().toISOString() })
+      .update({
+        status: "odrzucona",
+        decided_by: session.user.id,
+        decided_at: new Date().toISOString(),
+        decision_note: rejectNote.trim(),
+        updated_at: new Date().toISOString(),
+      })
       .eq("id", a.id);
     setBusy(null);
     if (!error) {
@@ -271,6 +404,7 @@ function PendingList({
       setRejecting(null); setRejectNote(""); onChanged();
     }
   }
+
   async function withdraw(a: Approval) {
     if (!confirm(`Wycofać zgłoszenie „${a.vendor}” (${fmtPln(a.amount_pln)})?`)) return;
     await supabase.from("payment_approvals").delete().eq("id", a.id);
@@ -283,24 +417,69 @@ function PendingList({
     <div className="space-y-3">
       {items.map((a) => {
         const mine = myPendingSubmissions.some((m) => m.id === a.id);
+        const aPartials = partials[a.id] ?? [];
+        const sumApproved = aPartials.reduce((s, p) => s + p.amount_pln, 0);
+        const remaining = Math.max(0, a.amount_pln - sumApproved);
+
         return (
           <div key={a.id} className="card">
             <div className="flex items-start justify-between gap-3 flex-wrap">
-              <div>
-                <div className="font-semibold text-slate-800">{a.vendor}</div>
-                <div className="text-xs text-slate-500 mt-0.5">
+              <div className="space-y-1">
+                <div className="font-semibold text-slate-800 text-base">{a.vendor}</div>
+                <div className="text-xs text-slate-500">
                   {a.title && <>{a.title} · </>}
                   {a.source === "rejestr" ? "z rejestru kosztów" : "wpis ręczny"}
                   {a.due_date && <> · termin {fmtDate(a.due_date)}</>}
                 </div>
-                <div className="text-xs text-slate-400 mt-0.5">Zgłosił {nameOf(a.submitted_by)} · {fmtDate(a.submitted_at)}</div>
-                {a.notes && <div className="text-xs text-slate-500 mt-1 italic">„{a.notes}”</div>}
+                <div className="text-xs text-slate-400">Zgłosił {nameOf(a.submitted_by)} · {fmtDate(a.submitted_at)}</div>
+                {a.notes && <div className="text-xs text-slate-600 italic bg-slate-50 px-2 py-1 rounded inline-block">„{a.notes}”</div>}
               </div>
+
               <div className="text-right shrink-0">
-                <div className="text-lg font-bold text-slate-800">{fmtPln(a.amount_pln)}</div>
-                <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_COLORS[a.status]}`}>{STATUS_LABELS[a.status]}</span>
+                <div className="text-xs text-slate-400 uppercase font-medium">Kwota pierwotna</div>
+                <div className="text-xl font-bold text-slate-900">{fmtPln(a.amount_pln)}</div>
+                <div className="mt-1">
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[a.status]}`}>
+                    {STATUS_LABELS[a.status]}
+                  </span>
+                </div>
               </div>
             </div>
+
+            {/* SEKCJA CZĘŚCIOWYCH AKCEPTACJI - pod główną kwotą pozycji */}
+            {aPartials.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-slate-100 bg-amber-50/50 -mx-4 -mb-1 px-4 py-3 rounded-b-lg">
+                <div className="text-xs font-semibold text-amber-900 mb-1.5 flex items-center justify-between">
+                  <span>Historia akceptacji częściowych ({aPartials.length})</span>
+                  <span className="text-xs font-mono font-bold text-amber-800">
+                    Suma zatwierdzona: {fmtPln(sumApproved)}
+                  </span>
+                </div>
+                <div className="space-y-1.5 mb-2">
+                  {aPartials.map((p, idx) => (
+                    <div key={p.id || idx} className="text-xs text-slate-700 bg-white border border-amber-200/70 rounded p-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                      <div>
+                        <span className="font-semibold text-emerald-700 font-mono mr-2">+{fmtPln(p.amount_pln)}</span>
+                        <span className="text-slate-500">zaakceptowano {fmtDateTime(p.created_at)}</span>
+                        <span className="text-slate-400 ml-1">przez {nameOf(p.decided_by)}</span>
+                        {p.note && (
+                          <div className="text-slate-600 italic mt-0.5 ml-0 sm:ml-2">
+                            Uwaga: „{p.note}”
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {/* Kwota pozostała do akceptacji, która nie znika do momentu całkowitego zaakceptowania */}
+                <div className="flex items-center justify-between pt-1 border-t border-amber-200/60 text-xs">
+                  <span className="text-amber-900 font-medium">Pozostało do akceptacji:</span>
+                  <span className="font-mono font-bold text-amber-900 text-sm bg-amber-100 px-2 py-0.5 rounded">
+                    {fmtPln(remaining)}
+                  </span>
+                </div>
+              </div>
+            )}
 
             {isApprover && (
               <div className="mt-3 pt-3 border-t border-slate-100">
@@ -315,9 +494,20 @@ function PendingList({
                     </div>
                   </div>
                 ) : (
-                  <div className="flex gap-2">
-                    <button className="btn-primary text-sm" disabled={busy === a.id} onClick={() => approve(a)}>
-                      {busy === a.id ? "Zapisuję…" : "✓ Zatwierdź"}
+                  <div className="flex gap-2 flex-wrap items-center">
+                    <button className="btn-primary text-sm" disabled={busy === a.id} onClick={() => approveFull(a)}>
+                      {busy === a.id ? "Zapisuję…" : aPartials.length > 0 ? `✓ Zaakceptuj resztę (${fmtPln(remaining)})` : "✓ Zatwierdź całość"}
+                    </button>
+                    <button
+                      className="btn-secondary text-sm text-blue-700 border-blue-200 hover:bg-blue-50"
+                      disabled={busy === a.id || remaining <= 0.01}
+                      onClick={() => {
+                        setPartialModal(a);
+                        setPartialAmount(remaining > 0 ? remaining.toFixed(2) : "");
+                        setPartialNote("");
+                      }}
+                    >
+                      ⚡ Akceptacja częściowa…
                     </button>
                     <button className="btn-secondary text-sm text-red-600" disabled={busy === a.id} onClick={() => setRejecting(a.id)}>
                       ✕ Odrzuć
@@ -326,7 +516,7 @@ function PendingList({
                 )}
               </div>
             )}
-            {!isApprover && mine && (
+            {!isApprover && mine && a.status === "oczekuje" && aPartials.length === 0 && (
               <div className="mt-3 pt-3 border-t border-slate-100">
                 <button className="text-xs text-red-500 hover:underline" onClick={() => withdraw(a)}>Wycofaj zgłoszenie</button>
               </div>
@@ -334,6 +524,92 @@ function PendingList({
           </div>
         );
       })}
+
+      {/* MODAL / FORMULARZ AKCEPTACJI CZĘŚCIOWEJ */}
+      {partialModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="card w-full max-w-md bg-white shadow-xl space-y-4">
+            <div>
+              <h3 className="text-base font-bold text-slate-900">Akceptacja częściowa</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {partialModal.vendor} {partialModal.title && `· ${partialModal.title}`}
+              </p>
+            </div>
+
+            {(() => {
+              const currentPartials = partials[partialModal.id] ?? [];
+              const sumApproved = currentPartials.reduce((s, p) => s + p.amount_pln, 0);
+              const remaining = Math.max(0, partialModal.amount_pln - sumApproved);
+              return (
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Pierwotna kwota pozycji:</span>
+                    <span className="font-mono font-medium">{fmtPln(partialModal.amount_pln)}</span>
+                  </div>
+                  {sumApproved > 0 && (
+                    <div className="flex justify-between text-emerald-700">
+                      <span>Dotychczas zaakceptowano:</span>
+                      <span className="font-mono font-medium">{fmtPln(sumApproved)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between text-amber-900 font-semibold pt-1 border-t border-slate-200">
+                    <span>Pozostało do akceptacji:</span>
+                    <span className="font-mono text-sm">{fmtPln(remaining)}</span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            <div className="space-y-3">
+              <div>
+                <label className="label">Kwota częściowej akceptacji (PLN)</label>
+                <input
+                  className="input-field font-mono"
+                  inputMode="decimal"
+                  placeholder="np. 5000.00"
+                  value={partialAmount}
+                  onChange={(e) => setPartialAmount(e.target.value)}
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="label">Informacja tekstowa / uwaga do akceptacji częściowej</label>
+                <textarea
+                  className="input-field"
+                  rows={3}
+                  placeholder="np. I transza płatności uzgodniona telefonicznie, reszta po weryfikacji specyfikacji"
+                  value={partialNote}
+                  onChange={(e) => setPartialNote(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                className="btn-secondary text-sm"
+                disabled={busy === partialModal.id}
+                onClick={() => {
+                  setPartialModal(null);
+                  setPartialAmount("");
+                  setPartialNote("");
+                }}
+              >
+                Anuluj
+              </button>
+              <button
+                type="button"
+                className="btn-primary text-sm"
+                disabled={busy === partialModal.id || !partialAmount.trim() || (num(partialAmount) ?? 0) <= 0}
+                onClick={submitPartial}
+              >
+                {busy === partialModal.id ? "Zapisuję…" : "Zatwierdź kwotę częściową"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -525,30 +801,79 @@ function SubmitForm({ session, invoices, onChanged }: { session: Session; invoic
   );
 }
 
-function HistoryTable({ items, nameOf }: { items: Approval[]; nameOf: (id: string | null) => string }) {
+function HistoryTable({
+  items, partials, nameOf,
+}: {
+  items: Approval[]; partials: Record<string, PartialApproval[]>; nameOf: (id: string | null) => string;
+}) {
   if (items.length === 0) return <div className="card text-sm text-slate-400 text-center py-8">Brak historii.</div>;
   return (
     <div className="card p-0 overflow-x-auto">
       <table className="w-full text-sm">
         <thead className="bg-slate-50 border-b">
           <tr className="text-left text-xs text-slate-500 uppercase">
-            <th className="px-4 py-2">Kontrahent</th><th className="px-4 py-2 text-right">Kwota</th>
+            <th className="px-4 py-2">Kontrahent</th><th className="px-4 py-2 text-right">Kwota pierwotna</th>
             <th className="px-4 py-2">Zgłosił</th><th className="px-4 py-2">Zgłoszono</th>
-            <th className="px-4 py-2">Status</th><th className="px-4 py-2">Decyzja</th><th className="px-4 py-2">Uwaga</th>
+            <th className="px-4 py-2">Status</th><th className="px-4 py-2">Szczegóły akceptacji</th><th className="px-4 py-2">Uwaga</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
-          {items.map((a) => (
-            <tr key={a.id} className="hover:bg-slate-50">
-              <td className="px-4 py-2">{a.vendor}{a.title && <div className="text-xs text-slate-400">{a.title}</div>}</td>
-              <td className="px-4 py-2 text-right font-mono">{fmtPln(a.amount_pln)}</td>
-              <td className="px-4 py-2 text-xs">{nameOf(a.submitted_by)}</td>
-              <td className="px-4 py-2 text-xs text-slate-500">{fmtDate(a.submitted_at)}</td>
-              <td className="px-4 py-2"><span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_COLORS[a.status]}`}>{STATUS_LABELS[a.status]}</span></td>
-              <td className="px-4 py-2 text-xs text-slate-500">{a.decided_by ? `${nameOf(a.decided_by)} · ${fmtDate(a.decided_at)}` : "—"}</td>
-              <td className="px-4 py-2 text-xs text-slate-500 italic">{a.decision_note ?? ""}</td>
-            </tr>
-          ))}
+          {items.map((a) => {
+            const aPartials = partials[a.id] ?? [];
+            const sumApproved = aPartials.reduce((s, p) => s + p.amount_pln, 0);
+            const remaining = Math.max(0, a.amount_pln - sumApproved);
+
+            return (
+              <tr key={a.id} className="hover:bg-slate-50 align-top">
+                <td className="px-4 py-2">
+                  <div className="font-medium text-slate-800">{a.vendor}</div>
+                  {a.title && <div className="text-xs text-slate-400">{a.title}</div>}
+                  {aPartials.length > 0 && (
+                    <div className="mt-2 space-y-1 bg-amber-50/60 p-2 rounded text-xs border border-amber-100">
+                      <div className="font-semibold text-amber-900">Historia częściowa ({aPartials.length}):</div>
+                      {aPartials.map((p) => (
+                        <div key={p.id} className="text-slate-600">
+                          • <strong className="text-emerald-700 font-mono">+{fmtPln(p.amount_pln)}</strong> ({fmtDateTime(p.created_at)})
+                          {p.note && <span className="italic text-slate-500 ml-1">„{p.note}”</span>}
+                        </div>
+                      ))}
+                      {a.status === "czesciowo_zaakceptowana" && (
+                        <div className="font-semibold text-amber-800 pt-1 border-t border-amber-200">
+                          Pozostało do akceptacji: {fmtPln(remaining)}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </td>
+                <td className="px-4 py-2 text-right font-mono font-medium">
+                  <div>{fmtPln(a.amount_pln)}</div>
+                  {aPartials.length > 0 && a.status === "czesciowo_zaakceptowana" && (
+                    <div className="text-xs text-amber-700 mt-1 font-sans">
+                      pozostało: <span className="font-mono font-semibold">{fmtPln(remaining)}</span>
+                    </div>
+                  )}
+                </td>
+                <td className="px-4 py-2 text-xs">{nameOf(a.submitted_by)}</td>
+                <td className="px-4 py-2 text-xs text-slate-500">{fmtDate(a.submitted_at)}</td>
+                <td className="px-4 py-2">
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[a.status]}`}>
+                    {STATUS_LABELS[a.status]}
+                  </span>
+                </td>
+                <td className="px-4 py-2 text-xs text-slate-500">
+                  {a.decided_by ? (
+                    <div>
+                      <div>{nameOf(a.decided_by)}</div>
+                      <div className="text-[11px] text-slate-400">{fmtDate(a.decided_at)}</div>
+                    </div>
+                  ) : aPartials.length > 0 ? (
+                    <span className="text-blue-600">W trakcie ({aPartials.length} transz)</span>
+                  ) : "—"}
+                </td>
+                <td className="px-4 py-2 text-xs text-slate-500 italic">{a.decision_note ?? ""}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

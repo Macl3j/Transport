@@ -19,17 +19,24 @@ import { getAuthedUser } from "@/lib/crmAuth";
 // zgłaszania/akceptowania płatności) — tylko loguje ostrzeżenie na serwerze.
 
 interface NotifyBody {
-  kind: "submitted" | "approved" | "rejected";
+  kind: "submitted" | "approved" | "rejected" | "partial_approved";
   vendor: string;
   amountPln: number;
+  partialAmountPln?: number;
+  remainingAmountPln?: number;
   title?: string | null;
   submittedByName?: string | null;
   decidedByName?: string | null;
   decisionNote?: string | null;
 }
 
-const VERB = { submitted: "🟠 Nowe zgłoszenie do akceptacji", approved: "✅ Płatność zatwierdzona", rejected: "🔴 Płatność odrzucona" };
-const COLOR = { submitted: "Warning", approved: "Good", rejected: "Attention" } as const;
+const VERB = {
+  submitted: "🟠 Nowe zgłoszenie do akceptacji",
+  approved: "✅ Płatność zatwierdzona",
+  partial_approved: "🟡 Płatność zaakceptowana częściowo",
+  rejected: "🔴 Płatność odrzucona",
+};
+const COLOR = { submitted: "Warning", approved: "Good", partial_approved: "Warning", rejected: "Attention" } as const;
 
 export async function POST(req: Request) {
   try {
@@ -50,12 +57,24 @@ export async function POST(req: Request) {
     const amount = body.amountPln.toLocaleString("pl-PL", { maximumFractionDigits: 0 }) + " PLN";
     const facts: { title: string; value: string }[] = [
       { title: "Kontrahent", value: body.vendor },
-      { title: "Kwota", value: amount },
+      { title: "Kwota łączna", value: amount },
     ];
+    if (body.kind === "partial_approved" && body.partialAmountPln != null) {
+      facts.push({
+        title: "Zaakceptowano częściowo",
+        value: body.partialAmountPln.toLocaleString("pl-PL", { maximumFractionDigits: 0 }) + " PLN",
+      });
+      if (body.remainingAmountPln != null) {
+        facts.push({
+          title: "Pozostało do akceptacji",
+          value: body.remainingAmountPln.toLocaleString("pl-PL", { maximumFractionDigits: 0 }) + " PLN",
+        });
+      }
+    }
     if (body.title) facts.push({ title: "Tytuł", value: body.title });
     if (body.submittedByName) facts.push({ title: "Zgłosił", value: body.submittedByName });
     if (body.kind !== "submitted" && body.decidedByName) facts.push({ title: "Decyzja", value: body.decidedByName });
-    if (body.kind === "rejected" && body.decisionNote) facts.push({ title: "Powód odrzucenia", value: body.decisionNote });
+    if (body.decisionNote) facts.push({ title: body.kind === "rejected" ? "Powód odrzucenia" : "Uwagi", value: body.decisionNote });
 
     const adaptiveCard = {
       type: "AdaptiveCard",
