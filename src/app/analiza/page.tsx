@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
@@ -94,6 +94,21 @@ function parseFracht(s: string): { amount: number; currency: string } {
   if (!m) return { amount: 0, currency: "EUR" };
   const num = parseFloat(m[1].replace(",", "."));
   return { amount: isNaN(num) ? 0 : num, currency: m[2] };
+}
+
+// Normalizacja numerów rejestracyjnych — obsługuje znane błędne warianty z TMS:
+// brak końcowego 'T' (WPR6337 → WPR6337T) oraz zbędna kropka (WPR6337T. → WPR6337T).
+const PLATE_ALIASES: Record<string, string> = {
+  "WPR6337":   "WPR6337T",
+  "WPR6337.":  "WPR6337T",
+  "WPR6337T.": "WPR6337T",
+  "WPR6338":   "WPR6338T",
+  "WPR6338.":  "WPR6338T",
+  "WPR6338T.": "WPR6338T",
+};
+function normalizePlate(raw: string): string {
+  const s = raw.trim().toUpperCase();
+  return PLATE_ALIASES[s] ?? s;
 }
 
 function orsStatusColor(s?: OrsVerification["status"]) {
@@ -223,7 +238,7 @@ export default function AnalizaPage() {
         const dKmMap = parseFloat(get(row, "km ład", "km wg", "Km") || "0");
         const dKm = dKmOdo > 0 ? dKmOdo : dKmMap;
         if (dKm < 10) continue;
-        const veh = get(row, "ciągnik", "ciagnik", "pojazd").toUpperCase();
+        const veh = normalizePlate(get(row, "ciągnik", "ciagnik", "pojazd"));
         // Pre-pass: używaj actual pickup date (tak samo jak main-loop) żeby perDobeShareFactor zgadzał się
         const pickupR = get(row, "podjęcie rzeczywiste", "podjecie rzeczywiste", "podjęcie", "podjecie", "data załadunku", "załadunek");
         const tDate = toDateKey(pickupR);
@@ -265,7 +280,7 @@ export default function AnalizaPage() {
             if (!isNaN(finalRate) && finalRate > frachtEur) frachtEur = finalRate;
           }
 
-          const vehicle       = get(row, "ciągnik", "ciagnik", "pojazd").toUpperCase();
+          const vehicle       = normalizePlate(get(row, "ciągnik", "ciagnik", "pojazd"));
           const naczepaReg    = get(row, "naczepa", "naczepa:", "naczepa ").toUpperCase();
           const originCountry = get(row, "zał. kraj", "zal. kraj", "kraj za").toUpperCase() || "PL";
           const destCountry = get(row, "roz. kraj", "kraj ro").toUpperCase() || "PL";

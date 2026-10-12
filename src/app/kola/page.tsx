@@ -95,6 +95,21 @@ function marginColor(pct: number) {
   return "text-red-600";
 }
 
+// Normalizacja numerów rejestracyjnych — obsługuje znane błędne warianty z TMS:
+// brak końcowego 'T' (WPR6337 → WPR6337T) oraz zbędna kropka (WPR6337T. → WPR6337T).
+const PLATE_ALIASES: Record<string, string> = {
+  "WPR6337":   "WPR6337T",
+  "WPR6337.":  "WPR6337T",
+  "WPR6337T.": "WPR6337T",
+  "WPR6338":   "WPR6338T",
+  "WPR6338.":  "WPR6338T",
+  "WPR6338T.": "WPR6338T",
+};
+function normalizePlate(raw: string): string {
+  const s = raw.trim().toUpperCase();
+  return PLATE_ALIASES[s] ?? s;
+}
+
 // ─── Parser utility functions ─────────────────────────────────
 function parseFracht(s: string, eurRate: number): number {
   if (!s) return 0;
@@ -211,7 +226,7 @@ function parseTmsForCycles(
     // Allow flat-rate orders through (km ≤ 5, fracht > 0) — only skip genuine junk rows
     if (distanceKm < 0.5 && frachtEur < 10) continue;
 
-    const vehicle       = get(row, "ciągnik", "ciagnik", "pojazd").toUpperCase();
+    const vehicle       = normalizePlate(get(row, "ciągnik", "ciagnik", "pojazd"));
     const naczepaReg    = get(row, "naczepa", "naczepa:", "naczepa ").toUpperCase();
     const client        = get(row, "zleceniodawca", "klient", "nadawca") || "—";
     const originCountry = get(row, "zał. kraj", "zal. kraj", "kraj za").toUpperCase() || "PL";

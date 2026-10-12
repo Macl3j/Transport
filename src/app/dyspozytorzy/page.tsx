@@ -137,6 +137,21 @@ function marginColor(pct: number) {
   return "text-red-600";
 }
 
+// Normalizacja numerów rejestracyjnych — obsługuje znane błędne warianty z TMS:
+// brak końcowego 'T' (WPR6337 → WPR6337T) oraz zbędna kropka (WPR6337T. → WPR6337T).
+const PLATE_ALIASES: Record<string, string> = {
+  "WPR6337":   "WPR6337T",
+  "WPR6337.":  "WPR6337T",
+  "WPR6337T.": "WPR6337T",
+  "WPR6338":   "WPR6338T",
+  "WPR6338.":  "WPR6338T",
+  "WPR6338T.": "WPR6338T",
+};
+function normalizePlate(raw: string): string {
+  const s = raw.trim().toUpperCase();
+  return PLATE_ALIASES[s] ?? s;
+}
+
 // Fracht z TMS to tekst z kwotą i walutą, np. "3334,50 EUR" albo "6262,40 PLN".
 // Zwraca kwotę w oryginalnej walucie oraz przeliczenie na EUR. Waluta inna niż EUR/PLN
 // NIE jest już po cichu traktowana jak EUR — wtedy eur=0 i recognized=false (wywołujący
@@ -391,7 +406,7 @@ export default function DyspozytorzyPage() {
       const dKmMapLad = parseFloat(get(row, "km ład", "km wg", "Km") || "0");
       const dKm = dKmLadOdo > 0 ? dKmLadOdo : dKmMapLad;
       if (dKm < 10) continue;
-      const veh = get(row, "ciągnik", "ciagnik", "pojazd").toUpperCase();
+      const veh = normalizePlate(get(row, "ciągnik", "ciagnik", "pojazd"));
       // Pre-pass: używaj actual pickup date (tak samo jak main-loop) żeby perDobeShareFactor zgadzał się
       const pickupR = get(row, "podjęcie rzeczywiste", "podjecie rzeczywiste", "podjęcie", "podjecie", "data załadunku");
       const tDate = toDateKey(pickupR);
@@ -447,7 +462,7 @@ export default function DyspozytorzyPage() {
       }
       // NOTE: do NOT skip fracht=0 routes — estimate them like analiza does (see below)
 
-      const vehicle    = get(row, "ciągnik", "ciagnik", "pojazd").toUpperCase();
+      const vehicle    = normalizePlate(get(row, "ciągnik", "ciagnik", "pojazd"));
       const naczepaReg = get(row, "naczepa", "naczepa:", "naczepa ").toUpperCase();
       const client     = get(row, "zleceniodawca", "klient", "nadawca") || "—";
       const originCountry = get(row, "zał. kraj", "zal. kraj", "kraj za").toUpperCase() || "PL";
