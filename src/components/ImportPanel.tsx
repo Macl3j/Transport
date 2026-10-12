@@ -232,7 +232,7 @@ export default function ImportPanel() {
           <li><strong>Wydatki / Koszty:</strong> Status, Numer, Data wystawienia, Sprzedawca, Netto PLN, Brutto PLN, Waluta, Transport</li>
           <li><strong>Kierowcy:</strong> Nazwisko, Imię, Samochód, Nr rej. Naczepy, Data zatrudnienia, Kraj</li>
           <li><strong>Faktury przychodowe:</strong> Status płatności, Numer, Data, Kontrahent, Netto PLN, Brutto PLN, Transport</li>
-          <li><strong>Rejestr transportów:</strong> Stan, Nr pełny, Ciągnik, Naczepa, Kierowca, Fracht, Zał./Roz. kraj, Km, Marża</li>
+          <li><strong>Rejestr transportów:</strong> Stan, Nr pełny, Ciągnik, Naczepa, Kierowca, Fracht, Zał./Roz. kraj, Km, Marża, Km zleceniodawcy, Km puste, Przewoźnik, Przewoźne, Utworzył</li>
           <li><strong>Zużycie paliwa FMS:</strong> Raport Trimble — Pojazd, Kierowca, Data, Jazda l/100km, Bieg jałowy, PTO, Całkowity</li>
           <li><strong>Przebieg dzienny:</strong> Tabela Raportu Przebiegu — Pojazd, Data, Przebieg (Km); aktualizuje licznik na karcie pojazdu najnowszym odczytem</li>
           <li><strong>Rejestr ubezpieczeń:</strong> Nr polisy, Typ (OC/AC/NNW), Nr rej., Marka, Model, VIN, Data początku/końca, Koszt PLN</li>
@@ -594,6 +594,12 @@ interface RouteHistoryRow {
   margin_eur_km: number | null;
   pickup_date: string | null;
   delivery_date: string | null;
+  km_client: number | null;
+  km_empty: number | null;
+  carrier_name: string | null;
+  carrier_cost_eur: number | null;
+  carrier_currency: string | null;
+  created_by: string | null;
 }
 
 // Niektóre eksporty z FK oznaczają nagłówki gwiazdką ("Ref. zleceniodawcy *",
@@ -633,6 +639,16 @@ async function importRejestr(
         frachtCurrency === "EUR" ? frachtAmount :
         null; // inna/nierozpoznana waluta — nie zgadujemy, że to EUR
 
+      // Przewoźne (koszt zapłacony przewoźnikowi) — ta sama logika przeliczenia
+      // co dla frachtu, żeby marża spedycyjna (fracht - przewoźne) była w EUR.
+      const przewozneRaw = row["Przewoźne z walutą"] ?? row["Przewozne z waluta"];
+      const { amount: przewozneAmount, currency: przewozneCurrency } = parseFracht(przewozneRaw);
+      const przewozneEur =
+        przewozneAmount == null ? null :
+        przewozneCurrency === "PLN" ? Math.round((przewozneAmount / eurRate) * 100) / 100 :
+        przewozneCurrency === "EUR" ? przewozneAmount :
+        null;
+
       return {
         order_number: orderNr,
         order_ref: strOrNull(row["Ref. zleceniodawcy"] ?? row["Ref"]),
@@ -651,6 +667,12 @@ async function importRejestr(
         margin_eur_km: numOrNull(row["Marża EUR na 1 KM z mapy"] ?? row["Marza EUR na 1 KM z mapy"]),
         pickup_date: dateOrNull(row["Podjęcie"] ?? row["Podjecie"] ?? row["Data załadunku"]),
         delivery_date: dateOrNull(row["Dostarczenie"] ?? row["Data rozładunku"]),
+        km_client: numOrNull(row["Km zleceniodawcy"]),
+        km_empty: numOrNull(row["Km puste wg. mapy"]),
+        carrier_name: strOrNull(row["Przewoźnik pełna nazwa"] ?? row["Przewoznik pelna nazwa"]),
+        carrier_cost_eur: przewozneEur,
+        carrier_currency: przewozneCurrency,
+        created_by: strOrNull(row["Utworzył"] ?? row["Utworzyl"]),
       };
     })
     .filter((r): r is RouteHistoryRow => r !== null);

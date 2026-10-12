@@ -57,6 +57,7 @@ export async function POST(req: Request) {
     if (body.submittedByName) facts.push({ title: "Zgłosił", value: body.submittedByName });
     if (body.kind !== "submitted" && body.decidedByName) facts.push({ title: body.kind === "revoked" ? "Cofnął" : "Decyzja", value: body.decidedByName });
     if (body.kind === "rejected" && body.decisionNote) facts.push({ title: "Powód odrzucenia", value: body.decisionNote });
+    if (body.kind === "approved" && body.decisionNote) facts.push({ title: "Komentarz", value: body.decisionNote });
 
     const adaptiveCard = {
       type: "AdaptiveCard",

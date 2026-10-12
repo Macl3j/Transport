@@ -218,16 +218,19 @@ function PendingList({
 }) {
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [rejectNote, setRejectNote] = useState("");
+  const [approveNote, setApproveNote] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
 
   async function approve(o: PartOrder) {
     setBusy(o.id);
+    const note = approveNote[o.id]?.trim() || null;
     const { error } = await supabase.from("part_orders")
-      .update({ status: "zatwierdzona", decided_by: session.user.id, decided_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .update({ status: "zatwierdzona", decided_by: session.user.id, decided_at: new Date().toISOString(), decision_note: note, updated_at: new Date().toISOString() })
       .eq("id", o.id);
     setBusy(null);
     if (!error) {
-      notifyTeams({ kind: "approved", partName: o.part_name, quantity: o.quantity, estimatedCostPln: o.estimated_cost_pln, vehicleReg: o.vehicle_reg, vendor: o.vendor, decidedByName: session.user.email });
+      notifyTeams({ kind: "approved", partName: o.part_name, quantity: o.quantity, estimatedCostPln: o.estimated_cost_pln, vehicleReg: o.vehicle_reg, vendor: o.vendor, decidedByName: session.user.email, decisionNote: note ?? undefined });
+      setApproveNote((prev) => { const next = { ...prev }; delete next[o.id]; return next; });
       onChanged();
     }
   }
@@ -290,13 +293,21 @@ function PendingList({
                     </div>
                   </div>
                 ) : (
-                  <div className="flex gap-2">
-                    <button className="btn-primary text-sm" disabled={busy === o.id} onClick={() => approve(o)}>
-                      {busy === o.id ? "Zapisuję…" : "✓ Zatwierdź"}
-                    </button>
-                    <button className="btn-secondary text-sm text-red-600" disabled={busy === o.id} onClick={() => setRejecting(o.id)}>
-                      ✕ Odrzuć
-                    </button>
+                  <div className="space-y-2">
+                    <input
+                      className="input-field text-sm"
+                      placeholder="Komentarz do akceptacji (opcjonalnie)"
+                      value={approveNote[o.id] ?? ""}
+                      onChange={(e) => setApproveNote((prev) => ({ ...prev, [o.id]: e.target.value }))}
+                    />
+                    <div className="flex gap-2">
+                      <button className="btn-primary text-sm" disabled={busy === o.id} onClick={() => approve(o)}>
+                        {busy === o.id ? "Zapisuję…" : "✓ Zatwierdź"}
+                      </button>
+                      <button className="btn-secondary text-sm text-red-600" disabled={busy === o.id} onClick={() => setRejecting(o.id)}>
+                        ✕ Odrzuć
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
