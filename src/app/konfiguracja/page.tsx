@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSettings, type AppSettings } from "@/lib/settings-context";
+import { supabase } from "@/lib/supabase";
 
 // ─── Helpers ─────────────────────────────────────────────────
 type Method = "per_dobe" | "per_km";
@@ -90,6 +91,22 @@ export default function KonfiguracjaPage() {
   const [local, setLocal] = useState<AppSettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved,  setSaved]  = useState(false);
+
+  // Podpowiedź z bazy floty: koszt pojazdów wyłączonych z eksploatacji i liczba aktywnych ciągników
+  const [fleetHint, setFleetHint] = useState<{ inactiveCount: number; inactiveEurMo: number; activeTractors: number } | null>(null);
+  useEffect(() => {
+    supabase.from("vehicles")
+      .select("vehicle_type,is_active,leasing_eur_mo,insurance_eur_mo")
+      .then(({ data }) => {
+        if (!data) return;
+        const inactive = data.filter(v => !v.is_active);
+        setFleetHint({
+          inactiveCount: inactive.length,
+          inactiveEurMo: inactive.reduce((s, v) => s + (Number(v.leasing_eur_mo) || 0) + (Number(v.insurance_eur_mo) || 0), 0),
+          activeTractors: data.filter(v => v.is_active && v.vehicle_type === "ciągnik").length,
+        });
+      });
+  }, []);
 
   // Use local draft if editing, else live settings
   const cur = local ?? settings;
@@ -252,6 +269,79 @@ export default function KonfiguracjaPage() {
           step={100}
           onChange={v => set("avgKmPerMonth", v)}
         />
+      </div>
+
+      {/* ── Koszty rozkładane na wszystkie trasy ── */}
+      <div className="card">
+        <h2 className="font-bold text-slate-800 mb-1">🧮 Koszty rozkładane na wszystkie trasy</h2>
+        <p className="text-xs text-slate-400 mb-4">
+          Kwota miesięczna na <strong>całą flotę</strong> jest dzielona przez liczbę ciągników i doliczana do każdej trasy
+          proporcjonalnie do jej czasu: kwota ÷ ciągniki ÷ 30 × doby trasy. Wartość 0 = pozycja wyłączona.
+          Zmiana wpływa na marżę we wszystkich analizach (kalkulator, dyspozytorzy, koła, analiza).
+        </p>
+        <NumberField
+          label="Koszty pojazdów, które nie jeżdżą"
+          description="Leasingi, ubezpieczenia i inne koszty pojazdów wyłączonych z eksploatacji, które i tak generują koszt"
+          value={cur.idleFleetCostPlnMo ?? 0}
+          unit="PLN/mies."
+          step={1000}
+          onChange={v => set("idleFleetCostPlnMo", v)}
+        />
+        {fleetHint && (
+          <div className="flex items-center justify-between gap-3 -mt-1 mb-2 pb-3 border-b border-slate-100 text-xs text-slate-500">
+            <span>
+              Z bazy: {fleetHint.inactiveCount} nieaktywnych pojazdów, leasing + ubezpieczenie ≈{" "}
+              <strong>{Math.round(fleetHint.inactiveEurMo).toLocaleString("pl-PL")} EUR</strong> ≈{" "}
+              <strong>{Math.round(fleetHint.inactiveEurMo * cur.plnEurRate).toLocaleString("pl-PL")} PLN</strong> miesięcznie
+              (bez innych kosztów, np. podatku, parkingu)
+            </span>
+            <button
+              type="button"
+              className="shrink-0 px-2.5 py-1 rounded-md border border-slate-200 hover:bg-slate-50 text-slate-600"
+              onClick={() => set("idleFleetCostPlnMo", Math.round(fleetHint.inactiveEurMo * cur.plnEurRate))}
+            >
+              Użyj tej kwoty
+            </button>
+          </div>
+        )}
+        <NumberField
+          label="Koszty finansowania floty"
+          description="Odsetki od kredytów i inne koszty finansowania (np. 35 000 PLN)"
+          value={cur.financingCostPlnMo ?? 0}
+          unit="PLN/mies."
+          step={1000}
+          onChange={v => set("financingCostPlnMo", v)}
+        />
+        <NumberField
+          label="Liczba ciągników do podziału"
+          description="Przez tyle sztuk dzielone są powyższe kwoty"
+          value={cur.overheadFleetSize ?? 51}
+          unit="ciągników"
+          step={1}
+          onChange={v => set("overheadFleetSize", Math.max(1, Math.round(v)))}
+        />
+        {fleetHint && (
+          <div className="flex items-center justify-between gap-3 -mt-1 mb-2 pb-3 border-b border-slate-100 text-xs text-slate-500">
+            <span>Z bazy: <strong>{fleetHint.activeTractors}</strong> aktywnych ciągników</span>
+            <button
+              type="button"
+              className="shrink-0 px-2.5 py-1 rounded-md border border-slate-200 hover:bg-slate-50 text-slate-600"
+              onClick={() => set("overheadFleetSize", fleetHint.activeTractors)}
+            >
+              Użyj tej liczby
+            </button>
+          </div>
+        )}
+        {(() => {
+          const n = Math.max(1, cur.overheadFleetSize ?? 51);
+          const perDay = (((cur.idleFleetCostPlnMo ?? 0) + (cur.financingCostPlnMo ?? 0)) / cur.plnEurRate) / n / 30;
+          return (
+            <p className="text-xs text-slate-500 pt-1">
+              Obciążenie jednej doby jazdy: <strong>{perDay.toFixed(2)} EUR</strong>
+              {" "}(trasa 3-dobowa: {(perDay * 3).toFixed(2)} EUR)
+            </p>
+          );
+        })()}
       </div>
 
       {/* ── Progi rentowności ── */}

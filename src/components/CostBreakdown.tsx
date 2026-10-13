@@ -26,6 +26,8 @@ const COLORS = [
   "#6366f1", // leasing ciągnik
   "#818cf8", // leasing naczepa
   "#f43f5e", // insurance
+  "#fb7185", // pojazdy nie jeżdżące
+  "#d946ef", // finansowanie
 ];
 
 const fmt = (n: number) =>
@@ -55,7 +57,9 @@ export default function CostBreakdown({
     { name: "Leasing cią.",   value: result.leasing,        icon: "💳" },
     { name: "Leasing nacz.",  value: result.trailerLeasing, icon: "🚛" },
     { name: "Ubezpieczenie",  value: result.insurance,      icon: "🛡️" },
-  ];
+    { name: "Pojazdy nie jeżdżące", value: result.idleFleet, icon: "🅿️" },
+    { name: "Finansowanie floty",   value: result.financing, icon: "🏦" },
+  ].filter(i => i.value > 0 || !["Pojazdy nie jeżdżące", "Finansowanie floty"].includes(i.name));
 
   const pieData = costItems.map(i => ({ name: i.name, value: i.value }));
 

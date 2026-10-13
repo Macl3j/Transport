@@ -39,6 +39,8 @@ export interface CostBreakdown {
   driver: number;
   leasing: number;        // tractor leasing
   trailerLeasing: number; // naczepa leasing
+  idleFleet: number;      // udział w kosztach pojazdów, które nie jeżdżą (parametr z /konfiguracja)
+  financing: number;      // udział w kosztach finansowania floty (parametr z /konfiguracja)
   service: number;
   idle: number;
   total: number;
@@ -147,6 +149,11 @@ export interface CalcSettings {
   avgKmPerMonth?:    number;  // km/miesiąc fallback
   marginGoodPct?:    number;  // >= rentowna (%)
   marginLowPct?:     number;  // >= niska marża (%)
+  // Koszty rozkładane na wszystkie trasy (PLN/mies. na całą flotę) — domyślnie 0
+  idleFleetCostPlnMo?: number; // leasing, ubezpieczenia i inne koszty pojazdów, które nie jeżdżą
+  financingCostPlnMo?: number; // odsetki i koszty finansowania floty
+  overheadFleetSize?:  number; // przez ile ciągników dzielimy te koszty (domyślnie 51)
+  plnEurRate?:         number; // kurs do przeliczenia powyższych kwot na EUR
 }
 
 export const DEFAULT_CALC_SETTINGS: CalcSettings = {
@@ -262,8 +269,17 @@ export function calculateRoute(input: RouteInput, settings?: CalcSettings): Cost
     ? (insuranceMo / 30) * routeDays * perDobeShare
     : (insuranceMo / fleetAvgKmMo) * totalKm;
 
+  // 9. KOSZTY FLOTY NIEJEŻDZĄCEJ I FINANSOWANIA — kwota miesięczna na całą flotę ÷ liczba
+  // ciągników ÷ 30 dni × doby trasy (z udziałem dniówki). Zawsze per dobę, bo to koszty
+  // niezależne od przebiegu; przy wartościach 0 (domyślnych) nie zmieniają wyniku.
+  const eurRate = s.plnEurRate && s.plnEurRate > 0 ? s.plnEurRate : 4.25;
+  const overheadFleet = Math.max(1, s.overheadFleetSize ?? 51);
+  const overheadDayFactor = (routeDays * perDobeShare) / 30 / overheadFleet;
+  const idleFleetCost = ((s.idleFleetCostPlnMo ?? 0) / eurRate) * overheadDayFactor;
+  const financingCost = ((s.financingCostPlnMo ?? 0) / eurRate) * overheadDayFactor;
+
   // ─── Totals ───────────────────────────────────────────────
-  const total = fuelCost + adblue + idle + tollCost + driverCost + serviceCost + leasingCost + trailerLeasingCost + insuranceCost;
+  const total = fuelCost + adblue + idle + tollCost + driverCost + serviceCost + leasingCost + trailerLeasingCost + insuranceCost + idleFleetCost + financingCost;
 
   const marginEur = freightEur - total;
   const marginPct = freightEur > 0 ? (marginEur / freightEur) * 100 : 0;
@@ -284,6 +300,8 @@ export function calculateRoute(input: RouteInput, settings?: CalcSettings): Cost
     leasing:        round2(leasingCost),
     trailerLeasing: round2(trailerLeasingCost),
     insurance:      round2(insuranceCost),
+    idleFleet:      round2(idleFleetCost),
+    financing:      round2(financingCost),
     total:     round2(total),
     marginEur:             round2(marginEur),
     marginPct:             round2(marginPct),

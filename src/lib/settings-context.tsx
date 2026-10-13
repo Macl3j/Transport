@@ -30,6 +30,9 @@ export const SETTINGS_DEFAULTS: AppSettings = {
   kmTargetMo:           10_000,
   tollEurPerKm:         0.30,
   budgetMarginPct:      10,
+  idleFleetCostPlnMo:   0,
+  financingCostPlnMo:   0,
+  overheadFleetSize:    51,
 };
 
 interface SettingsCtx {
@@ -67,6 +70,9 @@ function rowsToSettings(rows: { key: string; value: string }[]): AppSettings {
     kmTargetMo:           Number(map.km_target_mo        ?? 10000),
     tollEurPerKm:         Number(map.toll_eur_per_km     ?? 0.30),
     budgetMarginPct:      Number(map.budget_margin_pct   ?? 10),
+    idleFleetCostPlnMo:   Number(map.idle_fleet_cost_pln_mo ?? 0),
+    financingCostPlnMo:   Number(map.financing_cost_pln_mo  ?? 0),
+    overheadFleetSize:    Number(map.overhead_fleet_size    ?? 51),
   };
 }
 
@@ -87,6 +93,9 @@ const FIELD_TO_KEY: Record<keyof AppSettings, string> = {
   kmTargetMo:           "km_target_mo",
   tollEurPerKm:         "toll_eur_per_km",
   budgetMarginPct:      "budget_margin_pct",
+  idleFleetCostPlnMo:   "idle_fleet_cost_pln_mo",
+  financingCostPlnMo:   "financing_cost_pln_mo",
+  overheadFleetSize:    "overhead_fleet_size",
 };
 
 // ─── Provider ────────────────────────────────────────────────

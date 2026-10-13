@@ -35,6 +35,7 @@ interface CostBreakdownDetail {
   fuel: number; adblue: number; idle: number;
   toll: number; driver: number; service: number;
   leasing: number; trailerLeasing: number; insurance: number;
+  idleFleet?: number; financing?: number;
 }
 
 // ─── Monthly analysis types ───────────────────────────────────
@@ -578,6 +579,7 @@ export default function DyspozytorzyPage() {
           fuel: bd.fuel, adblue: bd.adblue, idle: bd.idle,
           toll: bd.toll, driver: bd.driver, service: bd.service,
           leasing: bd.leasing, trailerLeasing: bd.trailerLeasing, insurance: bd.insurance,
+          idleFleet: bd.idleFleet, financing: bd.financing,
         },
         costPerKm: bd.costPerKm,
         revenuePerKm: bd.revenuePerKm,
@@ -2044,7 +2046,9 @@ export default function DyspozytorzyPage() {
           { key: "Serwis",      val: bd.service,   icon: "🔧", color: "bg-slate-500" },
           { key: "AdBlue",      val: bd.adblue,    icon: "🔵", color: "bg-cyan-500" },
           { key: "Postój",      val: bd.idle,      icon: "⏸️", color: "bg-yellow-500" },
-        ].sort((a,b) => b.val - a.val);
+          { key: "Pojazdy nie jeżdżące", val: bd.idleFleet ?? 0, icon: "🅿️", color: "bg-rose-400" },
+          { key: "Finansowanie", val: bd.financing ?? 0, icon: "🏦", color: "bg-fuchsia-500" },
+        ].filter(c => c.val > 0 || (c.key !== "Pojazdy nie jeżdżące" && c.key !== "Finansowanie")).sort((a,b) => b.val - a.val);
 
         // Find biggest culprit
         const biggest = costs[0];
