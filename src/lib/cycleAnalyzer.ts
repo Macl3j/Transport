@@ -25,6 +25,9 @@ export interface CycleRouteInput {
   tripTimestamp?:     number;       // Unix ms (opcjonalnie — dokładność godzinowa)
   deliveryTimestamp?: number;       // Unix ms
   driverName?:        string;
+  // Do kosztu postoju (przerwy do następnej trasy tego pojazdu) — liczone jak w /dyspozytorzy
+  fixedCostPerDayEur?:  number;     // (leasing ciągnika + naczepy + ubezpieczenie) / doby trasy
+  driverCostPerDayEur?: number;     // stawka doby kierowcy z /konfiguracja
 }
 
 // ── Trasa wewnątrz cyklu ──────────────────────────────────────
@@ -47,6 +50,7 @@ export interface CycleRoute {
   driverName:     string;
   isFlatRate:     boolean;  // km ≤ flatRateKmMax && fracht ≥ flatRateMinEur
   gapDaysAfter:   number;   // przerwa po tej trasie (w ramach cyklu)
+  idleCostAfterEur: number; // koszt tej przerwy (kierowca + leasing + ubezpieczenie)
 }
 
 // ── Jedno kółko (pełny cykl za granicą) ─────────────────────
@@ -73,6 +77,13 @@ export interface TruckCycle {
 
   // Koszty (suma totalCost tras)
   totalCostEur:   number;
+
+  // Postoje — jak w /dyspozytorzy: przerwa × (kierowca + leasing + ubezpieczenie) na dobę,
+  // tylko dla par tras tego samego pojazdu z tego samego miesiąca (miesiąc = data podjęcia)
+  idleCostEur:       number;   // przerwy między trasami wewnątrz kółka
+  pauseCostAfterEur: number;   // przerwa po kółku (przed następnym)
+  realMarginEur:     number;   // marża tras − postoje
+  realMarginPct:     number;
 
   // Rentowność
   marginEur:      number;
@@ -102,6 +113,18 @@ function gapDays(prev: CycleRouteInput, next: CycleRouteInput): number {
   const d1 = new Date(prev.deliveryDate);
   const d2 = new Date(next.tripDate);
   return (d2.getTime() - d1.getTime()) / 86_400_000;
+}
+
+// ── Helper: koszt przerwy między dwiema trasami (ta sama reguła co w /dyspozytorzy) ──
+function idleCostBetween(prev: CycleRouteInput, next: CycleRouteInput): number {
+  const gap = gapDays(prev, next);
+  if (gap <= 0) return 0;
+  // Pary z różnych miesięcy (wg daty podjęcia) nie są liczone — jak w /dyspozytorzy
+  if (prev.tripDate.slice(0, 7) !== next.tripDate.slice(0, 7)) return 0;
+  const driverChanged = !!(prev.driverName && next.driverName && prev.driverName !== next.driverName);
+  const servicePl = gap > 2 && prev.destCountry.toUpperCase() === "PL";
+  const driverRate = (driverChanged || servicePl) ? 0 : (prev.driverCostPerDayEur ?? 0);
+  return round2(gap * (driverRate + (prev.fixedCostPerDayEur ?? 0)));
 }
 
 // ── Helper: czy to przerwa PL → PL (koniec cyklu) ─────────────
@@ -168,11 +191,13 @@ export function analyzeCycles(
       const pauseAfter = firstInNext
         ? Math.max(0, gapDays(lastInGroup, firstInNext))
         : 0;
+      const pauseCostAfter = firstInNext ? idleCostBetween(lastInGroup, firstInNext) : 0;
 
       // Zbuduj CycleRoute[]
       const cycleRoutes: CycleRoute[] = group.map((r, ri) => {
         const nextR = group[ri + 1];
         const gapAfter = nextR ? Math.max(0, gapDays(r, nextR)) : 0;
+        const idleAfter = nextR ? idleCostBetween(r, nextR) : 0;
         const isFlatRate = r.distanceKm <= flatRateKmMax && r.frachtEur >= flatRateMinEur;
         return {
           orderNr:      r.orderNr,
@@ -193,6 +218,7 @@ export function analyzeCycles(
           driverName:   r.driverName ?? "—",
           isFlatRate,
           gapDaysAfter: round2(gapAfter),
+          idleCostAfterEur: idleAfter,
         };
       });
 
@@ -209,6 +235,10 @@ export function analyzeCycles(
       const marginEur         = round2(totalFreightEur - totalCostEur);
       const marginPct         = totalFreightEur > 0
         ? round2((marginEur / totalFreightEur) * 100) : 0;
+      const idleCostEur       = round2(cycleRoutes.reduce((s, r) => s + r.idleCostAfterEur, 0));
+      const realMarginEur     = round2(marginEur - idleCostEur - pauseCostAfter);
+      const realMarginPct     = totalFreightEur > 0
+        ? round2((realMarginEur / totalFreightEur) * 100) : 0;
 
       const startDate = group[0].tripDate;
       const endDate   = lastInGroup.deliveryDate;
@@ -233,6 +263,10 @@ export function analyzeCycles(
         regularFreightEur,
         flatRateFreightEur,
         totalCostEur,
+        idleCostEur,
+        pauseCostAfterEur: round2(pauseCostAfter),
+        realMarginEur,
+        realMarginPct,
         marginEur,
         marginPct,
         revenuePerDay:    durationDays > 0 ? round2(totalFreightEur / durationDays) : 0,
@@ -257,6 +291,9 @@ export interface FleetCycleSummary {
   totalFreightEur:      number;
   totalCostEur:         number;
   totalMarginEur:       number;
+  totalIdleCostEur:     number;   // postoje (w kółkach i po kółkach)
+  totalRealMarginEur:   number;   // marża tras − postoje
+  realMarginPct:        number;
   avgMarginPct:         number;
   avgDurationDays:      number;
   avgFreightPerCycle:   number;
@@ -268,7 +305,8 @@ export function fleetCycleSummary(cycles: TruckCycle[]): FleetCycleSummary {
     return {
       totalCycles: 0, totalRoutes: 0, totalFlatRateRoutes: 0,
       totalKm: 0, totalFreightEur: 0, totalCostEur: 0,
-      totalMarginEur: 0, avgMarginPct: 0, avgDurationDays: 0,
+      totalMarginEur: 0, totalIdleCostEur: 0, totalRealMarginEur: 0, realMarginPct: 0,
+      avgMarginPct: 0, avgDurationDays: 0,
       avgFreightPerCycle: 0, avgKmPerCycle: 0,
     };
   }
@@ -276,6 +314,8 @@ export function fleetCycleSummary(cycles: TruckCycle[]): FleetCycleSummary {
   const totalFreightEur = round2(cycles.reduce((s, c) => s + c.totalFreightEur, 0));
   const totalCostEur    = round2(cycles.reduce((s, c) => s + c.totalCostEur, 0));
   const totalMarginEur  = round2(totalFreightEur - totalCostEur);
+  const totalIdleCostEur = round2(cycles.reduce((s, c) => s + c.idleCostEur + c.pauseCostAfterEur, 0));
+  const totalRealMarginEur = round2(totalMarginEur - totalIdleCostEur);
   return {
     totalCycles:         n,
     totalRoutes:         cycles.reduce((s, c) => s + c.routeCount, 0),
@@ -284,6 +324,9 @@ export function fleetCycleSummary(cycles: TruckCycle[]): FleetCycleSummary {
     totalFreightEur,
     totalCostEur,
     totalMarginEur,
+    totalIdleCostEur,
+    totalRealMarginEur,
+    realMarginPct:       totalFreightEur > 0 ? round2((totalRealMarginEur / totalFreightEur) * 100) : 0,
     avgMarginPct:        totalFreightEur > 0 ? round2((totalMarginEur / totalFreightEur) * 100) : 0,
     avgDurationDays:     round2(cycles.reduce((s, c) => s + c.durationDays, 0) / n),
     avgFreightPerCycle:  round2(totalFreightEur / n),

@@ -52,6 +52,9 @@ interface DispatcherPool {
   costEur: number;
   marginEur: number;
   marginPct: number;
+  idleCostEur: number;      // postoje: przerwy w kółkach i po kółkach
+  realMarginEur: number;    // marża tras − postoje
+  realMarginPct: number;
   avgMarginPerCyclePct: number;
   losses: number;
   lowMargin: number;
@@ -317,6 +320,8 @@ function parseTmsForCycles(
       tripTimestamp:    pickupTs,
       deliveryTimestamp: deliveryTs,
       driverName,
+      fixedCostPerDayEur:  (bd.leasing + bd.trailerLeasing + bd.insurance) / (bd.routeDays || 1),
+      driverCostPerDayEur: settings?.driverDailyCost ?? FLEET.driverDailyCostNet,
     });
   }
 
@@ -332,8 +337,10 @@ function FleetSummaryBar({ summary }: { summary: FleetCycleSummary }) {
     { label: "Km łącznie", value: fmtKm(summary.totalKm) },
     { label: "Fracht", value: fmtEur(summary.totalFreightEur) },
     { label: "Koszty", value: fmtEur(summary.totalCostEur) },
-    { label: "Marża", value: fmtEur(summary.totalMarginEur), highlight: summary.totalMarginEur >= 0 },
-    { label: "Marża %", value: fmtPct(summary.avgMarginPct) },
+    { label: "Marża tras", value: fmtEur(summary.totalMarginEur), highlight: summary.totalMarginEur >= 0 },
+    { label: "Marża tras %", value: fmtPct(summary.avgMarginPct) },
+    { label: "Postoje", value: summary.totalIdleCostEur > 0 ? `−${fmtEur(summary.totalIdleCostEur)}` : "—", warn: summary.totalIdleCostEur > 0 },
+    { label: "Marża po postojach", value: fmtEur(summary.totalRealMarginEur), highlight: summary.totalRealMarginEur >= 0 },
     { label: "Śr. czas kółka", value: fmtDays(summary.avgDurationDays) },
     { label: "Śr. fracht/kółko", value: fmtEur(summary.avgFreightPerCycle) },
   ];
@@ -464,13 +471,18 @@ function CycleCard({ cycle, expanded, onToggle, dispatcherName }: {
             <div className="text-sm text-gray-600">{fmtEur(cycle.totalCostEur)}</div>
           </div>
           <div>
-            <div className="text-xs text-gray-400">Marża</div>
+            <div className="text-xs text-gray-400">Marża tras</div>
             <div className={`text-sm ${marginTextColor(cycle.marginPct)}`}>
               {fmtEur(cycle.marginEur)}
             </div>
             <div className={`text-xs ${marginTextColor(cycle.marginPct)}`}>
               {fmtPct(cycle.marginPct)}
             </div>
+            {(cycle.idleCostEur + cycle.pauseCostAfterEur) > 0 && (
+              <div className="text-[11px] text-amber-600 mt-0.5" title="Marża tras minus postoje w kółku i przerwa po kółku">
+                po postojach {fmtEur(cycle.realMarginEur)}
+              </div>
+            )}
           </div>
           <div>
             <div className="text-xs text-gray-400">Fracht/dzień</div>
@@ -519,6 +531,18 @@ function CycleCard({ cycle, expanded, onToggle, dispatcherName }: {
                 </td>
                 <td />
               </tr>
+              {(cycle.idleCostEur + cycle.pauseCostAfterEur) > 0 && (
+                <tr className="bg-amber-50 text-xs">
+                  <td className="px-3 py-2 text-amber-800" colSpan={7}>
+                    ⏸ Postoje: w kółku −{fmtEur(cycle.idleCostEur)}
+                    {cycle.pauseCostAfterEur > 0 && <> · przerwa po kółku −{fmtEur(cycle.pauseCostAfterEur)}</>}
+                  </td>
+                  <td className={`px-3 py-2 text-right font-semibold ${marginTextColor(cycle.realMarginPct)}`}>
+                    realna marża {fmtEur(cycle.realMarginEur)} ({fmtPct(cycle.realMarginPct)})
+                  </td>
+                  <td />
+                </tr>
+              )}
             </tfoot>
           </table>
         </div>
@@ -733,6 +757,9 @@ export default function KolaPage() {
       const costEur = myCycles.reduce((s, c) => s + c.totalCostEur, 0);
       const marginEur = myCycles.reduce((s, c) => s + c.marginEur, 0);
       const marginPct = frachtEur > 0 ? (marginEur / frachtEur) * 100 : 0;
+      const idleCostEur = myCycles.reduce((s, c) => s + c.idleCostEur + c.pauseCostAfterEur, 0);
+      const realMarginEur = marginEur - idleCostEur;
+      const realMarginPct = frachtEur > 0 ? (realMarginEur / frachtEur) * 100 : 0;
       const totalKm = Math.round(myCycles.reduce((s, c) => s + c.totalKm, 0));
       const avgMarginPerCyclePct = myCycles.length > 0
         ? myCycles.reduce((s, c) => s + c.marginPct, 0) / myCycles.length
@@ -756,6 +783,9 @@ export default function KolaPage() {
         costEur,
         marginEur,
         marginPct,
+        idleCostEur,
+        realMarginEur,
+        realMarginPct,
         avgMarginPerCyclePct,
         losses,
         lowMargin,
@@ -775,6 +805,9 @@ export default function KolaPage() {
       const costEur = unassignedCycles.reduce((s, c) => s + c.totalCostEur, 0);
       const marginEur = unassignedCycles.reduce((s, c) => s + c.marginEur, 0);
       const marginPct = frachtEur > 0 ? (marginEur / frachtEur) * 100 : 0;
+      const idleCostEur = unassignedCycles.reduce((s, c) => s + c.idleCostEur + c.pauseCostAfterEur, 0);
+      const realMarginEur = marginEur - idleCostEur;
+      const realMarginPct = frachtEur > 0 ? (realMarginEur / frachtEur) * 100 : 0;
       const totalKm = Math.round(unassignedCycles.reduce((s, c) => s + c.totalKm, 0));
       const avgMarginPerCyclePct = unassignedCycles.length > 0
         ? unassignedCycles.reduce((s, c) => s + c.marginPct, 0) / unassignedCycles.length
@@ -793,6 +826,9 @@ export default function KolaPage() {
         costEur,
         marginEur,
         marginPct,
+        idleCostEur,
+        realMarginEur,
+        realMarginPct,
         avgMarginPerCyclePct,
         losses: allRoutes.filter(r => r.marginPct < 0).length,
         lowMargin: allRoutes.filter(r => r.marginPct >= 0 && r.marginPct < 5).length,
@@ -1027,7 +1063,12 @@ export default function KolaPage() {
                           <div className={`text-2xl font-black ${marginColor(d.marginPct)}`}>
                             {fmtPct(d.marginPct)}
                           </div>
-                          <div className="text-xs text-slate-400">marża</div>
+                          <div className="text-xs text-slate-400">marża tras</div>
+                          {d.routesCount > 0 && (
+                            <div className="text-xs text-slate-400 mt-0.5">
+                              po postojach <span className={`font-semibold ${marginTextColor(d.realMarginPct)}`}>{fmtPct(d.realMarginPct)}</span>
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -1041,7 +1082,7 @@ export default function KolaPage() {
                           <div className={`text-sm font-bold ${marginColor(d.marginPct)}`}>
                             {fmtEur(d.marginEur)}
                           </div>
-                          <div className="text-xs text-slate-400">marża EUR</div>
+                          <div className="text-xs text-slate-400">marża tras EUR</div>
                         </div>
                         <div className="bg-slate-50 rounded-lg py-2">
                           <div className="text-sm font-bold text-slate-800">
@@ -1050,6 +1091,15 @@ export default function KolaPage() {
                           <div className="text-xs text-slate-400">śr./kółko</div>
                         </div>
                       </div>
+
+                      {d.routesCount > 0 && (
+                        <div className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-amber-50 border border-amber-100 px-3 py-2 text-xs">
+                          <span className="text-amber-700">⏸ Postoje: <b>−{fmtEur(d.idleCostEur)}</b></span>
+                          <span className="text-slate-600">
+                            Realna marża: <b className={marginTextColor(d.realMarginPct)}>{fmtEur(d.realMarginEur)}</b>
+                          </span>
+                        </div>
+                      )}
 
                       {/* Mini bar status badges */}
                       <div className="mt-3 flex gap-1 text-xs flex-wrap items-center">
