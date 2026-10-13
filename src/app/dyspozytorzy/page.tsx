@@ -767,13 +767,18 @@ export default function DyspozytorzyPage() {
       ["RAPORT TYGODNIOWY HBM AUDYT — Wyniki Dyspozytorów"],
       [`Tydzień: ${weekLabel}`, "", "", `Kurs EUR/PLN: ${eurRate}`, `Paliwo: ${fuelPrice} EUR/l`],
       [],
-      ["Dyspozytor", "Ciągniki", "Naczepy", "Trasy", "Fracht EUR", "Koszty HBM EUR", "Marża EUR", "Marża %",
-       "Śr. marża %", "Km", "Straty", "Niska marża", "Rentowne"],
+      ["Dyspozytor", "Ciągniki", "Naczepy", "Trasy", "Fracht EUR", "Koszty HBM EUR", "Marża tras EUR", "Marża tras %",
+       "Śr. marża %", "Km", "Straty", "Niska marża", "Rentowne", "Postoje EUR", "Realna marża EUR", "Realna marża %"],
       ...kpiData.map(d => [
         d.name, d.ciagniki.length, d.naczepy.length, d.routes,
         Math.round(d.frachtEur), Math.round(d.costEur), Math.round(d.marginEur),
         +d.marginPct.toFixed(1), +d.avgMarginPct.toFixed(1), d.kmTotal,
         d.losses, d.lowMargin + d.breakeven, d.profitable,
+        ...(() => {
+          const idle = idleForDispatcher(d.id, "all");
+          const idleCost = idle?.cost ?? 0;
+          return [Math.round(idleCost), Math.round(d.marginEur - idleCost), d.frachtEur > 0 ? +(((d.marginEur - idleCost) / d.frachtEur) * 100).toFixed(1) : 0];
+        })(),
       ]),
       [],
       ["SUMA FLOTY", "", kpiData.reduce((s,d)=>s+d.routes,0),
@@ -783,7 +788,7 @@ export default function DyspozytorzyPage() {
       ],
     ];
     const ws1 = XLSX.utils.aoa_to_sheet(summaryData);
-    ws1["!cols"] = [16,8,8,6,12,14,12,8,10,8,7,10,10].map(w => ({ wch: w }));
+    ws1["!cols"] = [16,8,8,6,12,14,14,12,10,8,7,10,10,12,16,15].map(w => ({ wch: w }));
     XLSX.utils.book_append_sheet(wb2, ws1, "Podsumowanie");
 
     // Klienci ranking — wszystkie trasy
@@ -837,6 +842,19 @@ export default function DyspozytorzyPage() {
   const dispById = Object.fromEntries(dispatchers.map(d => [d.id, d]));
   const selectedKpi = kpiData.find(d => d.id === selectedDispatcher);
   const allRoutes = kpiData.flatMap(d => d.routeList);
+
+  // Koszty postojów dyspozytora = suma postojów jego pojazdów (przypisanie jak przy trasach).
+  // Zwraca null, gdy nie ma jeszcze analizy miesięcznej.
+  const idleForDispatcher = (dispId: string, typeFilter: "all" | "ciągnik" | "naczepa") => {
+    if (monthlyData.length === 0) return null;
+    let cost = 0, days = 0;
+    for (const s of monthlyData) {
+      if ((s.routes[0]?.dispatcher_id ?? "__unassigned__") !== dispId) continue;
+      if (typeFilter !== "all" && vehicles.find(v => v.reg === s.vehicle)?.vehicle_type !== typeFilter) continue;
+      cost += s.idleCostEur; days += s.idleDays;
+    }
+    return { cost, days };
+  };
 
   // Rentowność klientów — te same trasy/koszty co w Trasach i Dashboardzie,
   // przegrupowane po Zleceniodawcy zamiast po dyspozytorze.
@@ -984,10 +1002,10 @@ export default function DyspozytorzyPage() {
                     {[
                       ["Łączny fracht",    fmtEur(totalFracht),  "text-slate-800",   ""],
                       ["Łączne koszty HBM",fmtEur(totalCost),    "text-slate-800",   ""],
-                      ["Marża tras",       fmtEur(totalMargin),  totalMargin>=0?"text-emerald-600":"text-red-600", fmtPct(totalFracht>0?totalMargin/totalFracht:0)],
+                      ["Marża tras",       fmtEur(totalMargin),  totalMargin>=0?"text-emerald-600":"text-red-600", fmtPct(totalFracht>0?(totalMargin/totalFracht)*100:0)],
                       ["Koszty postojów",  totalIdle>0?`−${fmtEur(totalIdle)}`:"brak danych", totalIdle>0?"text-amber-600":"text-slate-400",
                         totalIdle>0&&totalFracht>0?`${(totalIdle/totalFracht*100).toFixed(1)}% frachtu`:""],
-                      ["Marża po postojach",fmtEur(trueMargin),  trueMargin>=0?(truePct>=0.05?"text-emerald-600":"text-amber-600"):"text-red-600", fmtPct(truePct)],
+                      ["Marża po postojach",fmtEur(trueMargin),  trueMargin>=0?(truePct>=0.05?"text-emerald-600":"text-amber-600"):"text-red-600", fmtPct(truePct*100)],
                       ["Śr. marża/dyspo",  fmtPct(avgMargin),    "text-slate-800",   ""],
                       ["Trasy ze stratą",  kpiData.reduce((s,d)=>s+d.losses,0).toString(), kpiData.reduce((s,d)=>s+d.losses,0)>0?"text-red-600":"text-emerald-600",""],
                     ].map(([label,val,cls,sub])=>(
@@ -1014,6 +1032,9 @@ export default function DyspozytorzyPage() {
                   const filtCost   = filteredRoutes.reduce((s,r)=>s+r.totalCost,0);
                   const filtMargin = filtFracht - filtCost;
                   const filtMarginPct = filtFracht > 0 ? (filtMargin/filtFracht)*100 : 0;
+                  const idle = idleForDispatcher(d.id, vehicleTypeFilter);
+                  const realMargin = filtMargin - (idle?.cost ?? 0);
+                  const realPct = filtFracht > 0 ? (realMargin/filtFracht)*100 : 0;
                   return (
                   <div key={d.id}
                     onClick={()=>setSelectedDispatcher(selectedDispatcher===d.id?null:d.id)}
@@ -1038,7 +1059,12 @@ export default function DyspozytorzyPage() {
                       </div>
                       <div className="text-right">
                         <div className={`text-2xl font-black ${marginColor(filtMarginPct)}`}>{fmtPct(filtMarginPct)}</div>
-                        <div className="text-xs text-slate-400">marża</div>
+                        <div className="text-xs text-slate-400">marża tras</div>
+                        {idle && (
+                          <div className="text-xs text-slate-400 mt-0.5">
+                            po postojach <span className={`font-semibold ${marginColor(realPct)}`}>{fmtPct(realPct)}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -1049,7 +1075,7 @@ export default function DyspozytorzyPage() {
                       </div>
                       <div className="bg-slate-50 rounded-lg py-2">
                         <div className={`text-sm font-bold ${marginColor(filtMarginPct)}`}>{fmtEur(filtMargin)}</div>
-                        <div className="text-xs text-slate-400">marża EUR</div>
+                        <div className="text-xs text-slate-400">marża tras EUR</div>
                       </div>
                       <div className="bg-slate-50 rounded-lg py-2">
                         <div className="text-sm font-bold text-slate-800">
@@ -1058,6 +1084,18 @@ export default function DyspozytorzyPage() {
                         <div className="text-xs text-slate-400">śr./trasę</div>
                       </div>
                     </div>
+
+                    {idle && (
+                      <div className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-amber-50 border border-amber-100 px-3 py-2 text-xs">
+                        <span className="text-amber-700">
+                          ⏸ Postoje: <b>−{fmtEur(idle.cost)}</b>
+                          <span className="text-amber-600/70"> ({idle.days.toFixed(1)} d)</span>
+                        </span>
+                        <span className="text-slate-600">
+                          Realna marża: <b className={marginColor(realPct)}>{fmtEur(realMargin)}</b>
+                        </span>
+                      </div>
+                    )}
 
                     {/* Mini bar */}
                     <div className="mt-3 flex gap-1 text-xs flex-wrap">
