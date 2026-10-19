@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
-import { calculateRoute, FLEET } from "@/lib/calculator";
+import { calculateRoute, computeRouteDays, FLEET } from "@/lib/calculator";
 import { useSettings } from "@/lib/settings-context";
 import {
   analyzeCycles,
@@ -245,17 +245,11 @@ function parseTmsForCycles(
     const pickupTs   = toTimestamp(pickupRaw);
     const deliveryTs = toTimestamp(deliveryRaw);
     const totalKm    = distanceKm + (emptyKm ?? 0);
-    const maxReasonableDays = Math.max(2, Math.ceil((totalKm || 200) / 150));
-
-    let routeDays: number | undefined;
-    if (pickupTs !== undefined && deliveryTs !== undefined && deliveryTs > pickupTs) {
-      const dur = (deliveryTs - pickupTs) / 86400000;
-      if (dur <= maxReasonableDays)
-        routeDays = Math.round(dur * 100) / 100;
-    } else if (tripDate && deliveryDate && deliveryDate >= tripDate) {
-      const rawDays = Math.max(1, daysBetween(tripDate, deliveryDate) + 1);
-      if (rawDays <= maxReasonableDays) routeDays = rawDays;
-    }
+    // Każda doba kalendarzowa trasy jest kosztem, także postój i weekend poza krajem
+    const routeDays = computeRouteDays({
+      pickupTs, deliveryTs, tripDate, deliveryDate, totalKm,
+      abroad: originCountry !== "PL" || destCountry !== "PL",
+    });
 
     // Toll from TMS
     const tmsTollEurRaw = parseFloat(get(row, "myto na trasie eur", "myto eur", "toll eur") || "0");
@@ -320,7 +314,7 @@ function parseTmsForCycles(
       tripTimestamp:    pickupTs,
       deliveryTimestamp: deliveryTs,
       driverName,
-      fixedCostPerDayEur:  (bd.leasing + bd.trailerLeasing + bd.insurance) / (bd.routeDays || 1),
+      fixedCostPerDayEur:  (bd.leasing + bd.trailerLeasing + bd.insurance + (bd.idleFleet ?? 0) + (bd.financing ?? 0)) / (bd.routeDays || 1),
       driverCostPerDayEur: settings?.driverDailyCost ?? FLEET.driverDailyCostNet,
     });
   }

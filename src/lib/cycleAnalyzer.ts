@@ -4,6 +4,8 @@
 // Wykrywa flat-rate orders (1km za kilkaset EUR)
 // ============================================================
 
+import { idleGapCostEur } from "@/lib/calculator";
+
 // ── Minimal route interface (spełniany przez RouteMetric) ─────
 export interface CycleRouteInput {
   orderNr:            string;
@@ -26,7 +28,7 @@ export interface CycleRouteInput {
   deliveryTimestamp?: number;       // Unix ms
   driverName?:        string;
   // Do kosztu postoju (przerwy do następnej trasy tego pojazdu) — liczone jak w /dyspozytorzy
-  fixedCostPerDayEur?:  number;     // (leasing ciągnika + naczepy + ubezpieczenie) / doby trasy
+  fixedCostPerDayEur?:  number;     // (leasing ciągnika + naczepy + ubezpieczenie + koszty floty) / doby trasy
   driverCostPerDayEur?: number;     // stawka doby kierowcy z /konfiguracja
 }
 
@@ -122,9 +124,16 @@ function idleCostBetween(prev: CycleRouteInput, next: CycleRouteInput): number {
   // Pary z różnych miesięcy (wg daty podjęcia) nie są liczone — jak w /dyspozytorzy
   if (prev.tripDate.slice(0, 7) !== next.tripDate.slice(0, 7)) return 0;
   const driverChanged = !!(prev.driverName && next.driverName && prev.driverName !== next.driverName);
-  const servicePl = gap > 2 && prev.destCountry.toUpperCase() === "PL";
-  const driverRate = (driverChanged || servicePl) ? 0 : (prev.driverCostPerDayEur ?? 0);
-  return round2(gap * (driverRate + (prev.fixedCostPerDayEur ?? 0)));
+  // Każda doba postoju jest kosztem; poza krajem także weekend z dobówką kierowcy
+  return idleGapCostEur({
+    gapDays: gap,
+    startMs: prev.deliveryTimestamp ?? Date.parse(prev.deliveryDate),
+    endMs:   next.tripTimestamp ?? Date.parse(next.tripDate),
+    abroad: prev.destCountry.toUpperCase() !== "PL",
+    driverChanged,
+    vehicleDailyRate: prev.fixedCostPerDayEur ?? 0,
+    driverDailyRate: prev.driverCostPerDayEur ?? 0,
+  }).cost;
 }
 
 // ── Helper: czy to przerwa PL → PL (koniec cyklu) ─────────────

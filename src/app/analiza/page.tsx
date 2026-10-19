@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
-import { calculateRoute, profitabilityLabel, euroClass as deriveEuroClass, FLEET } from "@/lib/calculator";
+import { calculateRoute, computeRouteDays, profitabilityLabel, euroClass as deriveEuroClass, FLEET } from "@/lib/calculator";
 import { useSettings } from "@/lib/settings-context";
 
 interface OrsVerification {
@@ -305,25 +305,16 @@ export default function AnalizaPage() {
           const deliveryRaw = get(row, "dostarczenie rzeczywiste", "dostarczenie rzeczyw", "dostarczenie", "data rozładunku", "rozładunek");
           const tripDate    = toDateKey(pickupRaw);
           // Route duration — ułamkowe dni na podstawie rzeczywistych timestamp-ów
-          let routeDays: number | undefined;
+          // Każda doba kalendarzowa trasy jest kosztem, także postój i weekend poza krajem
           const pickupTs   = toTimestamp(pickupRaw);
           const deliveryTs = toTimestamp(deliveryRaw);
           const totalKm    = distanceKm + (emptyKmRaw > 0 ? emptyKmRaw : 0);
-          const maxReasonableDays = Math.max(2, Math.ceil((totalKm || 500) / 150));
-          if (pickupTs !== undefined && deliveryTs !== undefined && deliveryTs > pickupTs) {
-            const durationDays = (deliveryTs - pickupTs) / 86400000;
-            routeDays = durationDays <= maxReasonableDays
-              ? Math.round(durationDays * 100) / 100
-              : undefined;
-          } else if (pickupRaw && deliveryRaw) {
-            // Fallback: całkowite dni gdy brak dokładnych timestamp-ów
-            const d1 = new Date(toDateKey(pickupRaw));
-            const d2 = new Date(toDateKey(deliveryRaw));
-            if (!isNaN(d1.getTime()) && !isNaN(d2.getTime()) && d2 >= d1) {
-              const rawDays = Math.max(1, Math.round((d2.getTime() - d1.getTime()) / 86400000) + 1);
-              routeDays = rawDays <= maxReasonableDays ? rawDays : undefined;
-            }
-          }
+          const routeDays = computeRouteDays({
+            pickupTs, deliveryTs,
+            tripDate: toDateKey(pickupRaw), deliveryDate: toDateKey(deliveryRaw),
+            totalKm,
+            abroad: originCountry !== "PL" || destCountry !== "PL",
+          });
 
           // Kontynuacja trasy — ten sam ciągnik, ten sam dzień → dziel koszty dzienne proporcjonalnie
           const dayKey = vehicle && tripDate ? `${vehicle}|${tripDate}` : "";

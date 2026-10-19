@@ -317,6 +317,86 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+// ─── Doby trasy z kalendarza (z weekendem poza krajem) ─────────
+// Koszty dobowe (kierowca, leasing, ubezpieczenie, koszty floty) liczymy za każdą dobę
+// kalendarzową trasy, także za postój i weekendową przerwę. Dotychczasowy limit
+// "rozsądnego" czasu trasy (ceil(km/150) dób) odrzucał trasy z weekendem i wtedy
+// kalkulator spadał do ceil(km/570), gubiąc całe doby postoju. Gdy trasa jest poza
+// krajem (załadunek lub rozładunek poza PL), soboty i niedziele na trasie nie liczą się
+// do limitu, bo kierowca i pojazd stoją wtedy za granicą.
+
+const DAY_MS = 86_400_000;
+
+/** Liczba dób (ułamkowa) przypadających na sobotę i niedzielę w przedziale [startMs, endMs] (doby UTC). */
+export function weekendDaysBetween(startMs: number, endMs: number): number {
+  if (!(endMs > startMs)) return 0;
+  let weekend = 0;
+  let cursor = startMs;
+  while (cursor < endMs) {
+    const dayStart = Math.floor(cursor / DAY_MS) * DAY_MS;
+    const next = Math.min(dayStart + DAY_MS, endMs);
+    const dow = new Date(dayStart).getUTCDay(); // 0 = niedziela, 6 = sobota
+    if (dow === 0 || dow === 6) weekend += (next - cursor) / DAY_MS;
+    cursor = next;
+  }
+  return weekend;
+}
+
+/**
+ * Koszt postoju między dwiema trasami tego samego pojazdu — za każdą dobę kalendarzową.
+ * Koszt stały pojazdu (leasing, naczepa, ubezpieczenie, floty niejeżdżące, finansowanie) ciąży zawsze.
+ * Dobówka kierowcy: poza krajem za każdą dobę (także sobota i niedziela), w Polsce tylko za dni robocze
+ * i bez postoju serwisowego >2 dni oraz bez zmiany kierowcy.
+ */
+export function idleGapCostEur(p: {
+  gapDays: number;           // doby postoju (ułamkowe)
+  startMs?: number;          // koniec poprzedniej trasy
+  endMs?: number;            // początek następnej trasy
+  abroad: boolean;           // pojazd stoi poza PL (kraj rozładunku poprzedniej trasy)
+  driverChanged: boolean;
+  vehicleDailyRate: number;  // EUR/dobę: leasing + naczepa + ubezpieczenie + koszty floty
+  driverDailyRate: number;   // EUR/dobę
+}): { cost: number; isServicePl: boolean; driverDays: number } {
+  const gap = p.gapDays;
+  const isServicePl = gap > 2 && !p.abroad;
+  const weekend = p.startMs !== undefined && p.endMs !== undefined && !isNaN(p.startMs) && !isNaN(p.endMs)
+    ? Math.min(gap, weekendDaysBetween(p.startMs, p.endMs))
+    : 0;
+  const driverDays = p.driverChanged || isServicePl ? 0 : p.abroad ? gap : Math.max(0, gap - weekend);
+  return {
+    cost: round2(gap * p.vehicleDailyRate + driverDays * p.driverDailyRate),
+    isServicePl,
+    driverDays,
+  };
+}
+
+export interface RouteDaysInput {
+  pickupTs?: number;      // ms, rzeczywiste podjęcie
+  deliveryTs?: number;    // ms, rzeczywiste dostarczenie
+  tripDate?: string;      // YYYY-MM-DD (fallback bez godzin)
+  deliveryDate?: string;  // YYYY-MM-DD (fallback bez godzin)
+  totalKm: number;        // ładowne + puste
+  abroad: boolean;        // załadunek lub rozładunek poza PL
+}
+
+/** Doby trasy do kalkulacji; undefined = brak wiarygodnych dat (kalkulator użyje ceil(km/570)). */
+export function computeRouteDays(i: RouteDaysInput): number | undefined {
+  const maxReasonableDays = Math.max(2, Math.ceil((i.totalKm || 500) / 150));
+  if (i.pickupTs !== undefined && i.deliveryTs !== undefined && i.deliveryTs > i.pickupTs) {
+    const dur = (i.deliveryTs - i.pickupTs) / DAY_MS;
+    const allowance = i.abroad ? weekendDaysBetween(i.pickupTs, i.deliveryTs) : 0;
+    return dur <= maxReasonableDays + allowance ? Math.round(dur * 100) / 100 : undefined;
+  }
+  if (i.tripDate && i.deliveryDate && i.deliveryDate >= i.tripDate) {
+    const t0 = Date.parse(i.tripDate), t1 = Date.parse(i.deliveryDate);
+    if (isNaN(t0) || isNaN(t1)) return undefined;
+    const rawDays = Math.max(1, Math.round((t1 - t0) / DAY_MS) + 1);
+    const allowance = i.abroad ? weekendDaysBetween(t0, t1 + DAY_MS) : 0;
+    return rawDays <= maxReasonableDays + allowance ? rawDays : undefined;
+  }
+  return undefined;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────
 export function profitabilityLabel(
   marginPct: number,

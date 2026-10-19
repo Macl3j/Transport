@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
-import { calculateRoute, FLEET } from "@/lib/calculator";
+import { calculateRoute, computeRouteDays, idleGapCostEur, FLEET } from "@/lib/calculator";
 import { useSettings } from "@/lib/settings-context";
 
 // ─── Types ────────────────────────────────────────────────────
@@ -500,21 +500,14 @@ export default function DyspozytorzyPage() {
 
       // Route duration — ułamkowe dni na podstawie rzeczywistych timestamp-ów
       // (np. trasa 6h = 0.25d, trasa 31h = 1.29d); totalKm = ładowne + puste dla sanity check
-      let routeDays: number | undefined;
+      // Każda doba kalendarzowa trasy jest kosztem, także postój i weekend poza krajem
       const pickupTs   = toTimestamp(pickupRaw);
       const deliveryTs = toTimestamp(deliveryRaw);
       const totalKm    = distanceKm + (emptyKm ?? 0);
-      const maxReasonableDays = Math.max(2, Math.ceil((totalKm || 500) / 150));
-      if (pickupTs !== undefined && deliveryTs !== undefined && deliveryTs > pickupTs) {
-        const durationDays = (deliveryTs - pickupTs) / 86400000;
-        routeDays = durationDays <= maxReasonableDays
-          ? Math.round(durationDays * 100) / 100   // 2 miejsca dla kalkulacji, UI pokazuje 1
-          : undefined;
-      } else if (tripDate && deliveryDate && deliveryDate >= tripDate) {
-        // Fallback: całkowite dni kalendarzowe gdy brak dokładnych timestamp-ów
-        const rawDays = Math.max(1, daysBetween(tripDate, deliveryDate) + 1);
-        routeDays = rawDays <= maxReasonableDays ? rawDays : undefined;
-      }
+      const routeDays = computeRouteDays({
+        pickupTs, deliveryTs, tripDate, deliveryDate, totalKm,
+        abroad: originCountry !== "PL" || destCountry !== "PL",
+      });
 
       // Kontynuacja — ten sam ciągnik, ten sam dzień
       const dayKey = vehicle && tripDate ? `${vehicle}|${tripDate}` : "";
@@ -690,27 +683,34 @@ export default function DyspozytorzyPage() {
           : daysBetween(prev.deliveryDate, next.tripDate);
         if (gap <= 0) continue; // overlapping or same-day: no idle
 
-        // Daily fixed-cost rate: driver + leasing/30 + trailerLeasing/30 + insurance/30
-        // Use the breakdown of any route for per-day rates (avg if multiple)
+        // Dobowy koszt stały pojazdu za KAŻDĄ dobę postoju (także weekend): leasing ciągnika i naczepy,
+        // ubezpieczenie oraz udział w kosztach floty niejeżdżącej i finansowania — stawki z rozbicia
+        // poprzedniej trasy, przeliczone na pełną dobę (rozbicie jest przemnożone przez udział dniówki).
         const bd = prev.breakdown;
         const driverDailyRate = settings.driverDailyCost ?? 181.95;
-        const days = prev.routeDays || 1;
-        const leasingDailyRate = (bd.leasing + bd.trailerLeasing) / days;
-        const insuranceDailyRate = bd.insurance / days;
+        const days = (prev.routeDays || 1) * (prev.perDobeShareFactor || 1);
+        const vehicleDailyRate = (bd.leasing + bd.trailerLeasing + bd.insurance + (bd.idleFleet ?? 0) + (bd.financing ?? 0)) / days;
         // Jeśli postój wypada między różnymi kierowcami — kierowca odszedł (lub nie dojechał),
         // więc nie naliczamy jego dobówki za dni przestoju pojazdu.
         const driverChanged = !!(prev.driverName && next.driverName && prev.driverName !== next.driverName);
-        // Postój >2 dni w Polsce = serwis / pojazd w kraju — kierowca nie pobiera diety
-        const isServicePl = gap > 2 && (prev.destCountry === "PL" || prev.destCountry === "pl");
-        const effectiveDriverRate = (driverChanged || isServicePl) ? 0 : driverDailyRate;
-        const dailyFixed = effectiveDriverRate + leasingDailyRate + insuranceDailyRate;
+        // Poza krajem kierowca stoi z pojazdem: dobówka za każdą dobę, także sobotę i niedzielę.
+        // W Polsce dobówka tylko za dni robocze, bez serwisu >2 dni (reguła w idleGapCostEur).
+        const idle = idleGapCostEur({
+          gapDays: gap,
+          startMs: prev.deliveryTimestamp ?? Date.parse(prev.deliveryDate),
+          endMs:   next.tripTimestamp ?? Date.parse(next.tripDate),
+          abroad: prev.destCountry.toUpperCase() !== "PL",
+          driverChanged,
+          vehicleDailyRate,
+          driverDailyRate,
+        });
 
         gaps.push({
           prevRoute: prev,
           nextRoute: next,
           idleDays: gap,
-          idleCostEur: Math.round(gap * dailyFixed * 100) / 100,
-          isServicePl,
+          idleCostEur: idle.cost,
+          isServicePl: idle.isServicePl,
         });
       }
 
