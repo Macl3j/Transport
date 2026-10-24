@@ -19,6 +19,7 @@ interface CostInvoice {
   pozostalo_do_zaplaty_pln: number | null;
   pojazd_reg: string | null;
   kraj_sprzedawcy: string | null;
+  odbiorca?: string | null; // "Odbiorca" z rejestru kosztów (B&M / KRAVTT) — migracja 032
 }
 
 // ── Kategorie ryzyka — bazujące na realnej historii płatności ──
@@ -83,6 +84,17 @@ function percentile(sorted: number[], p: number): number {
 }
 
 // ── Import — parsowanie eksportu faktur kosztowych ─────────────
+// Kolumna cost_invoices.odbiorca pochodzi z migracji 032 (Cashflow). Gdy jej jeszcze nie
+// ma w bazie, zapisujemy faktury jak dotąd, bez odbiorcy.
+async function insertCostBatch(batch: object[]) {
+  let res = await supabase.from("cost_invoices").insert(batch as never[]);
+  if (res.error && /odbiorca/i.test(res.error.message)) {
+    const stripped = (batch as Record<string, unknown>[]).map((r) => { const { odbiorca: _o, ...rest } = r; void _o; return rest; });
+    res = await supabase.from("cost_invoices").insert(stripped as never[]);
+  }
+  return res;
+}
+
 function parseCostFile(buffer: ArrayBuffer): { rows: Omit<CostInvoice, "id">[]; error?: string } {
   const wb = XLSX.read(new Uint8Array(buffer), { type: "array", cellDates: true });
   // Preferuj arkusz "Sheet" (surowe dane), fallback: arkusz z największą liczbą wierszy
@@ -124,6 +136,8 @@ function parseCostFile(buffer: ArrayBuffer): { rows: Omit<CostInvoice, "id">[]; 
     pozostalo:    idx("Pozostało do zapłaty w PLN"),
     pojazd:       idx("Pojazd nr rej"),
     kraj:         idx("Kraj sprzedawcy"),
+    odbiorca:     idx("Odbiorca"),
+    firma:        idx("Firma"), // część eksportów nazywa odbiorcę faktury "Firma"
   };
 
   const rows: Omit<CostInvoice, "id">[] = [];
@@ -142,6 +156,7 @@ function parseCostFile(buffer: ArrayBuffer): { rows: Omit<CostInvoice, "id">[]; 
       pozostalo_do_zaplaty_pln: numOrNull(row[col.pozostalo]),
       pojazd_reg: strOrNull(row[col.pojazd]),
       kraj_sprzedawcy: strOrNull(row[col.kraj]),
+      odbiorca: (col.odbiorca !== -1 ? strOrNull(row[col.odbiorca]) : null) ?? (col.firma !== -1 ? strOrNull(row[col.firma]) : null),
     });
   }
   return { rows };
@@ -252,7 +267,7 @@ export default function PlatnosciPage() {
         let imported = 0;
         for (let i = 0; i < rows.length; i += 500) {
           const batch = rows.slice(i, i + 500);
-          const { error: insErr } = await supabase.from("cost_invoices").insert(batch as never[]);
+          const { error: insErr } = await insertCostBatch(batch);
           if (insErr) throw insErr;
           imported += batch.length;
         }

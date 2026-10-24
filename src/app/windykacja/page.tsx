@@ -93,6 +93,7 @@ interface CostInvoiceRow {
   pozostalo_do_zaplaty_pln: number | null;
   pojazd_reg: string | null;
   kraj_sprzedawcy: string | null;
+  odbiorca: string | null; // migracja 032
 }
 function toIso(v: unknown): string | null {
   if (v instanceof Date) {
@@ -118,6 +119,17 @@ function strOrNull(v: unknown): string | null {
   const s = String(v).trim();
   return s === "" ? null : s;
 }
+// Kolumna cost_invoices.odbiorca pochodzi z migracji 032 (Cashflow). Gdy jej jeszcze nie
+// ma w bazie, zapisujemy faktury jak dotąd, bez odbiorcy.
+async function insertCostBatch(batch: object[]) {
+  let res = await supabase.from("cost_invoices").insert(batch as never[]);
+  if (res.error && /odbiorca/i.test(res.error.message)) {
+    const stripped = (batch as Record<string, unknown>[]).map((r) => { const { odbiorca: _o, ...rest } = r; void _o; return rest; });
+    res = await supabase.from("cost_invoices").insert(stripped as never[]);
+  }
+  return res;
+}
+
 function parseCostFile(buffer: ArrayBuffer): { rows: CostInvoiceRow[]; error?: string } {
   const wb = XLSX.read(new Uint8Array(buffer), { type: "array", cellDates: true });
   let sheetName = wb.SheetNames.includes("Sheet") ? "Sheet" : wb.SheetNames[0];
@@ -147,7 +159,8 @@ function parseCostFile(buffer: ArrayBuffer): { rows: CostInvoiceRow[]; error?: s
     status: idx("Status spłaty"), wystawienia: idx("Data wystawienia"),
     termin: idx("Termin płatności"), zaplata: idx("Data zapłaty"),
     brutto: idx("Brutto PLN"), pozostalo: idx("Pozostało do zapłaty w PLN"),
-    pojazd: idx("Pojazd nr rej"), kraj: idx("Kraj sprzedawcy"),
+    pojazd: idx("Pojazd nr rej"), kraj: idx("Kraj sprzedawcy"), odbiorca: idx("Odbiorca"),
+    firma: idx("Firma"), // część eksportów nazywa odbiorcę faktury "Firma"
   };
 
   const rows: CostInvoiceRow[] = [];
@@ -161,6 +174,7 @@ function parseCostFile(buffer: ArrayBuffer): { rows: CostInvoiceRow[]; error?: s
       data_zaplaty: toIso(row[col.zaplata]), brutto_pln: numOrNull(row[col.brutto]),
       pozostalo_do_zaplaty_pln: numOrNull(row[col.pozostalo]), pojazd_reg: strOrNull(row[col.pojazd]),
       kraj_sprzedawcy: col.kraj !== -1 ? strOrNull(row[col.kraj]) : null,
+      odbiorca: (col.odbiorca !== -1 ? strOrNull(row[col.odbiorca]) : null) ?? (col.firma !== -1 ? strOrNull(row[col.firma]) : null),
     });
   }
   return { rows };
@@ -355,7 +369,7 @@ function WindykacjaDashboard({ session }: { session: Session }) {
         let imported = 0;
         for (let i = 0; i < rows.length; i += 500) {
           const batch = rows.slice(i, i + 500);
-          const { error: insErr } = await supabase.from("cost_invoices").insert(batch as never[]);
+          const { error: insErr } = await insertCostBatch(batch);
           if (insErr) throw insErr;
           imported += batch.length;
         }
