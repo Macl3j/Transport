@@ -38,6 +38,7 @@ const TRANSPORT_GROUPS: NavGroup[] = [
       { href: "/platnosci", label: "Płatności 💰" },
       { href: "/windykacja", label: "Windykacja" },
       { href: "/akceptacje", label: "Akceptacje" },
+      { href: "/rozliczenia-kierowcow", label: "Rozliczenia kierowców" },
       { href: "/kondycja-finansowa", label: "Kondycja 🩺" },
     ],
   },
