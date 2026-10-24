@@ -378,6 +378,9 @@ export function parseSettlementWorkbook(wb: XLSX.WorkBook, year: number, month: 
   for (const name of wb.SheetNames) {
     if (name.trim().toUpperCase() === "RAZEM") continue;
     const ws = wb.Sheets[name];
+    // Arkusz rozliczenia kierowcy ma stały układ: nagłówek w J2 i etykieta „IMIĘ:” w J4.
+    // Inne arkusze (np. rejestr transportów) pomijamy, zamiast czytać z nich przypadkowe komórki.
+    if (!/ROZLICZENIE\s+WYP[ŁL]ATY/i.test(cellStr(ws, "J2")) || !/^IMI/i.test(cellStr(ws, "J4"))) continue;
     const dayRate = cellNum(ws, "S4"), leaveRate = cellNum(ws, "S5");
     const days = cellNum(ws, "T7") ?? 0, leave = cellNum(ws, "R10") ?? 0;
     const credits = cellNum(ws, "K9") ?? 0, deductions = cellNum(ws, "K14") ?? 0;
@@ -392,6 +395,9 @@ export function parseSettlementWorkbook(wb: XLSX.WorkBook, year: number, month: 
     if (creditsText && credits === 0) issues.push(`opis uznania bez kwoty: „${creditsText.slice(0, 40)}”`);
     if (deductionsText && !/^brak$/i.test(deductionsText) && deductions === 0) issues.push(`opis obciążenia bez kwoty: „${deductionsText.slice(0, 40)}”`);
     if ((days > 0 || leave > 0) && (dayRate == null || leaveRate == null)) { issues.push("brak stawki w arkuszu"); blocking = true; }
+    if ((dayRate != null && (dayRate < 50 || dayRate > 1500)) || (leaveRate != null && (leaveRate < 50 || leaveRate > 1500))) {
+      issues.push(`nietypowa stawka (${dayRate} / ${leaveRate} zł) — sprawdź arkusz`); blocking = true;
+    }
     if (total != null && dayRate != null && leaveRate != null) {
       const calc = round2(days * dayRate + leave * leaveRate + credits + deductions);
       if (Math.abs(calc - total) > 0.5) issues.push(`suma w pliku ${total} ≠ wyliczona ${calc}`);

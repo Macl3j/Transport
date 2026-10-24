@@ -681,6 +681,20 @@ async function importRejestr(
     })
     .filter((r): r is RouteHistoryRow => r !== null);
 
+  // route_history.vehicle_reg ma klucz obcy do vehicles(reg): jedno zlecenie z numerem
+  // ciągnika spoza kartoteki odrzucało całą paczkę 50 zleceń. Nieznane numery zerujemy
+  // (zlecenie się zapisuje) i zgłaszamy na końcu, żeby dopisać pojazd do kartoteki.
+  const { data: vehRows } = await supabase.from("vehicles").select("reg").range(0, 4999);
+  const knownRegs = new Set((vehRows ?? []).map((v) => String((v as { reg: string }).reg)));
+  const unknownPlates = new Map<string, number>();
+  if (knownRegs.size > 0) {
+    validRows.forEach((r) => {
+      if (r.vehicle_reg && !knownRegs.has(r.vehicle_reg)) {
+        unknownPlates.set(r.vehicle_reg, (unknownPlates.get(r.vehicle_reg) ?? 0) + 1);
+        r.vehicle_reg = null;
+      }
+    });
+  }
   const rhRows = validRows as unknown as Record<string, unknown>[];
   let res = await upsertBatches("route_history", rhRows, "order_number");
   // Kolumny pickup_actual / delivery_actual dodaje migracja 031. Gdy jeszcze jej
@@ -694,6 +708,10 @@ async function importRejestr(
     });
     res = await upsertBatches("route_history", stripped, "order_number");
     res.errors.unshift("Pominięto rzeczywiste daty podjęcia i dostawy — uruchom migrację 031_route_history_actual_dates.sql w Supabase i wczytaj plik ponownie.");
+  }
+  if (unknownPlates.size > 0) {
+    const list = [...unknownPlates].map(([p, n]) => `${p} (${n})`).join(", ");
+    res.errors.push(`Uwaga: zlecenia z ciągnikiem spoza kartoteki pojazdów zapisano bez numeru ciągnika: ${list}. Dopisz pojazd do kartoteki i wczytaj plik ponownie.`);
   }
   return { ...res, skipped: res.skipped + skipped };
 }

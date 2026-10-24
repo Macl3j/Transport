@@ -264,7 +264,7 @@ function Dashboard({ session }: { session: Session }) {
             />
           )}
           {tab === "osoby" && isApprover && (
-            <PeopleTab people={people} rates={rates} period={period} onChanged={loadBase} />
+            <PeopleTab people={people} rates={rates} period={period} periods={periods} onChanged={async () => { await loadBase(); await loadPeriod(); }} />
           )}
           {tab === "import" && isApprover && (
             <ImportTab period={period} people={people} rates={rates} lines={lines} entries={entries}
@@ -327,6 +327,29 @@ function MonthTab(props: {
     };
     const { error } = await supabase.from("payroll_lines").upsert(row, { onConflict: "period_id,person_id" });
     if (error) { alert(`${fullName(person)}: ${error.message}`); }
+    await props.reloadPeriod();
+  }
+
+  // Usuwanie błędnych danych. Baza i tak blokuje zmiany w zatwierdzonym miesiącu (RLS),
+  // a każde usunięcie trafia do dziennika zmian.
+  async function removeRow(person: Person) {
+    if (!period) return;
+    const n = entries.filter((e) => e.person_id === person.id).length;
+    if (!confirm(`Usunąć z miesiąca ${periodLabel(period.year, period.month)} cały wpis kierowcy ${fullName(person)} (dni i ${n} pozycji uznań/potrąceń)? Kierowca zostaje w bazie osób.`)) return;
+    const e1 = await supabase.from("payroll_entries").delete().eq("period_id", period.id).eq("person_id", person.id);
+    const e2 = e1.error ? e1 : await supabase.from("payroll_lines").delete().eq("period_id", period.id).eq("person_id", person.id);
+    if (e2.error) alert("Nie udało się usunąć: " + e2.error.message);
+    setExpanded(null);
+    await props.reloadPeriod();
+  }
+  async function clearPeriod() {
+    if (!period) return;
+    if (!confirm(`Usunąć WSZYSTKIE wpisy z miesiąca ${periodLabel(period.year, period.month)}: ${lines.length} kierowców i ${entries.length} pozycji? Osoby i stawki zostają. Tego nie da się cofnąć (zapis zostanie w dzienniku zmian).`)) return;
+    setBusy(true);
+    const e1 = await supabase.from("payroll_entries").delete().eq("period_id", period.id);
+    const e2 = e1.error ? e1 : await supabase.from("payroll_lines").delete().eq("period_id", period.id);
+    setBusy(false);
+    if (e2.error) alert("Nie udało się wyczyścić miesiąca: " + e2.error.message);
     await props.reloadPeriod();
   }
 
@@ -445,6 +468,9 @@ function MonthTab(props: {
         {period && period.status === "wyslany" && isApprover && (
           <button className="btn-secondary" disabled={busy} onClick={reopen}>Nowa wersja (odblokuj)</button>
         )}
+        {period && isApprover && (period.status === "otwarty" || period.status === "zgloszony") && (lines.length > 0 || entries.length > 0) && (
+          <button className="text-red-600 hover:underline text-sm" disabled={busy} onClick={clearPeriod}>Wyczyść miesiąc</button>
+        )}
         {period && isApprover && (
           <>
             <button className="btn-secondary" onClick={() => download("ods")}>Pobierz .ods</button>
@@ -549,7 +575,8 @@ function MonthTab(props: {
                         <tr className="bg-slate-50/70">
                           <td colSpan={isApprover ? 11 : 9} className="px-4 py-3">
                             <EntriesPanel person={p} period={period} entries={es} editable={editable} issues={pIssues}
-                              note={l?.note ?? ""} onNote={async (v) => { await saveDaysNote(p, v); }} onChanged={props.reloadPeriod} />
+                              note={l?.note ?? ""} onNote={async (v) => { await saveDaysNote(p, v); }} onChanged={props.reloadPeriod}
+                              canRemoveRow={editable && (!!l || es.length > 0)} onRemoveRow={() => removeRow(p)} />
                           </td>
                         </tr>
                       )}
@@ -639,9 +666,10 @@ function DayInput({ value, max, disabled, onCommit }: { value: number | null; ma
 }
 
 // ── Pozycje (uznania / potrącenia) jednego kierowcy ───────────
-function EntriesPanel({ person, period, entries, editable, issues, note, onNote, onChanged }: {
+function EntriesPanel({ person, period, entries, editable, issues, note, onNote, onChanged, canRemoveRow, onRemoveRow }: {
   person: Person; period: Period; entries: Entry[]; editable: boolean; issues: Issue[];
   note: string; onNote: (v: string) => Promise<void>; onChanged: () => Promise<void>;
+  canRemoveRow: boolean; onRemoveRow: () => void;
 }) {
   const [kind, setKind] = useState<EntryKind>("credit");
   const [category, setCategory] = useState(CREDIT_CATEGORIES[0]);
@@ -735,6 +763,11 @@ function EntriesPanel({ person, period, entries, editable, issues, note, onNote,
         <input className="input-field" value={noteTxt} disabled={!editable} onChange={(e) => setNoteTxt(e.target.value)}
           onBlur={() => { if (noteTxt !== note) onNote(noteTxt); }} />
       </div>
+      {canRemoveRow && (
+        <div className="text-right">
+          <button className="text-red-600 hover:underline text-xs" onClick={onRemoveRow}>Usuń cały wpis tego kierowcy z miesiąca</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -757,7 +790,7 @@ function IssuesPanel({ issues, people }: { issues: Issue[]; people: Person[] }) 
 // ══════════════════════════════════════════════════════════════
 // Zakładka: Osoby i stawki (approver)
 // ══════════════════════════════════════════════════════════════
-function PeopleTab({ people, rates, period, onChanged }: { people: Person[]; rates: Rate[]; period: Period | null; onChanged: () => Promise<void> }) {
+function PeopleTab({ people, rates, period, periods, onChanged }: { people: Person[]; rates: Rate[]; period: Period | null; periods: Period[]; onChanged: () => Promise<void> }) {
   const now = new Date();
   const [first, setFirst] = useState(""); const [last, setLast] = useState("");
   const [rateFrom, setRateFrom] = useState(`${period?.year ?? now.getFullYear()}-${String(period?.month ?? now.getMonth() + 1).padStart(2, "0")}`);
@@ -773,6 +806,30 @@ function PeopleTab({ people, rates, period, onChanged }: { people: Person[]; rat
   async function patchPerson(id: string, patch: Partial<Person>) {
     const { error } = await supabase.from("payroll_people").update(patch).eq("id", id);
     if (error) alert(error.message);
+    await onChanged();
+  }
+  // Usuwa kierowcę wraz ze stawkami oraz dniami i pozycjami w otwartych miesiącach.
+  // Gdy ma dane w miesiącu zatwierdzonym lub wysłanym do Ozar — odmawia (wtedy
+  // zostaje dezaktywacja), żeby nie rozjechać zestawień, które już poszły dalej.
+  async function deletePerson(p: Person) {
+    const [l, e] = await Promise.all([
+      supabase.from("payroll_lines").select("period_id").eq("person_id", p.id),
+      supabase.from("payroll_entries").select("period_id").eq("person_id", p.id),
+    ]);
+    if (l.error || e.error) { alert("Nie udało się sprawdzić danych kierowcy: " + (l.error ?? e.error)!.message); return; }
+    const used = new Set([...(l.data ?? []), ...(e.data ?? [])].map((x) => (x as { period_id: string }).period_id));
+    const locked = periods.filter((pr) => used.has(pr.id) && (pr.status === "zatwierdzony" || pr.status === "wyslany"));
+    if (locked.length > 0) {
+      alert(`Nie można usunąć kierowcy ${fullName(p)}: ma dane w zatwierdzonych miesiącach (${locked.map((x) => periodLabel(x.year, x.month)).join(", ")}). Odblokuj te miesiące albo odznacz „Aktywny”.`);
+      return;
+    }
+    if (!confirm(`Usunąć kierowcę ${fullName(p)} razem ze stawkami oraz dniami i pozycjami w ${used.size} miesiącach? Tego nie da się cofnąć (zapis zostanie w dzienniku zmian).`)) return;
+    for (const q of [
+      supabase.from("payroll_entries").delete().eq("person_id", p.id),
+      supabase.from("payroll_lines").delete().eq("person_id", p.id),
+    ]) { const r = await q; if (r.error) { alert("Nie udało się usunąć: " + r.error.message); return; } }
+    const r = await supabase.from("payroll_people").delete().eq("id", p.id);
+    if (r.error) { alert("Nie udało się usunąć kierowcy: " + r.error.message); return; }
     await onChanged();
   }
   async function saveRate(personId: string) {
@@ -820,7 +877,12 @@ function PeopleTab({ people, rates, period, onChanged }: { people: Person[]; rat
                         <button className="btn-primary !px-3 !py-1.5" onClick={() => saveRate(p.id)}>Zapisz</button>
                         <button className="text-slate-400 text-xs" onClick={() => setEditing(null)}>anuluj</button>
                       </div>
-                    ) : <button className="text-blue-600 hover:underline text-xs" onClick={() => setEditing(p.id)}>Ustaw stawkę</button>}
+                    ) : (
+                      <div className="flex gap-3 justify-end">
+                        <button className="text-blue-600 hover:underline text-xs" onClick={() => setEditing(p.id)}>Ustaw stawkę</button>
+                        <button className="text-red-600 hover:underline text-xs" onClick={() => deletePerson(p)}>Usuń</button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               );
@@ -859,7 +921,13 @@ function ImportTab({ period, people, rates, lines, entries, onDone }: {
     setResult(null); setFileName(f.name);
     const buf = await f.arrayBuffer();
     const wb = XLSX.read(buf, { type: "array" });
-    setRows(parseSettlementWorkbook(wb, target.year, target.month));
+    const parsed = parseSettlementWorkbook(wb, target.year, target.month);
+    if (parsed.length === 0) {
+      setRows(null);
+      setResult("Ten plik nie wygląda na rozliczenie wypłat: nie ma w nim arkuszy „ROZLICZENIE WYPŁATY” (arkusz na kierowcę). Wczytaj plik „wypłaty kierowcy <miesiąc>”, a nie np. rejestr transportów. Rejestr transportów wczytuje się na stronie Import (typ „Rejestr transportów”).");
+      return;
+    }
+    setRows(parsed);
   }
 
   async function run() {
@@ -926,7 +994,7 @@ function ImportTab({ period, people, rates, lines, entries, onDone }: {
         {!canImport && <div className="text-amber-700">Import jest możliwy tylko do pustego, otwartego miesiąca.</div>}
         <input type="file" accept=".ods,.xlsx,.xls" disabled={!canImport} onChange={(e) => onFile(e.target.files?.[0])} />
         {fileName && <div className="text-xs text-slate-500">{fileName}</div>}
-        {result && <div className="text-emerald-700">{result}</div>}
+        {result && <div className={/^(Błąd|Ten plik)/.test(result) ? "text-red-600" : "text-emerald-700"}>{result}</div>}
       </div>
       {rows && (
         <div className="card !p-0 overflow-x-auto">
