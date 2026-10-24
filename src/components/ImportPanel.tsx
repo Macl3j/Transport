@@ -594,6 +594,8 @@ interface RouteHistoryRow {
   margin_eur_km: number | null;
   pickup_date: string | null;
   delivery_date: string | null;
+  pickup_actual: string | null;   // "Podjęcie rzeczywiste" (migracja 031)
+  delivery_actual: string | null; // "Dostarczenie rzeczywiste" (migracja 031)
   km_client: number | null;
   km_empty: number | null;
   carrier_name: string | null;
@@ -667,6 +669,8 @@ async function importRejestr(
         margin_eur_km: numOrNull(row["Marża EUR na 1 KM z mapy"] ?? row["Marza EUR na 1 KM z mapy"]),
         pickup_date: dateOrNull(row["Podjęcie"] ?? row["Podjecie"] ?? row["Data załadunku"]),
         delivery_date: dateOrNull(row["Dostarczenie"] ?? row["Data rozładunku"]),
+        pickup_actual: dateOrNull(row["Podjęcie rzeczywiste"] ?? row["Podjecie rzeczywiste"]),
+        delivery_actual: dateOrNull(row["Dostarczenie rzeczywiste"]),
         km_client: numOrNull(row["Km zleceniodawcy"]),
         km_empty: numOrNull(row["Km puste wg. mapy"]),
         carrier_name: strOrNull(row["Przewoźnik pełna nazwa"] ?? row["Przewoznik pelna nazwa"]),
@@ -677,11 +681,20 @@ async function importRejestr(
     })
     .filter((r): r is RouteHistoryRow => r !== null);
 
-  const res = await upsertBatches(
-    "route_history",
-    validRows as unknown as Record<string, unknown>[],
-    "order_number"
-  );
+  const rhRows = validRows as unknown as Record<string, unknown>[];
+  let res = await upsertBatches("route_history", rhRows, "order_number");
+  // Kolumny pickup_actual / delivery_actual dodaje migracja 031. Gdy jeszcze jej
+  // nie uruchomiono, zapis padałby w całości — wtedy zapisujemy bez nich
+  // (jak dotąd) i mówimy wprost, czego brakuje.
+  if (res.imported === 0 && res.errors.some((e) => /pickup_actual|delivery_actual/.test(e))) {
+    const stripped = rhRows.map((r) => {
+      const { pickup_actual: _pa, delivery_actual: _da, ...rest } = r;
+      void _pa; void _da;
+      return rest;
+    });
+    res = await upsertBatches("route_history", stripped, "order_number");
+    res.errors.unshift("Pominięto rzeczywiste daty podjęcia i dostawy — uruchom migrację 031_route_history_actual_dates.sql w Supabase i wczytaj plik ponownie.");
+  }
   return { ...res, skipped: res.skipped + skipped };
 }
 

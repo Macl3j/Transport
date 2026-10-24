@@ -10,6 +10,7 @@ import {
   STATUS_LABELS, DEFAULT_EUR_PLN, CREDIT_CATEGORIES, DEDUCTION_CATEGORIES,
   round2, daysInMonth, periodLabel, fullName, rateFor, computeLine, validatePeriod,
   buildOzarWorkbook, ozarFileName, parseSettlementWorkbook,
+  suggestDays, firstOfMonth, lastOfMonth, SUGGESTION_TOLERANCE, type RokosOrder, type DaySuggestion,
 } from "@/lib/payroll";
 
 // ══════════════════════════════════════════════════════════════
@@ -95,6 +96,8 @@ function Dashboard({ session }: { session: Session }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("miesiac");
   const [busy, setBusy] = useState(false);
+  const [orders, setOrders] = useState<RokosOrder[]>([]);
+  const [ordersMeta, setOrdersMeta] = useState<{ actualCols: boolean; error: string | null }>({ actualCols: true, error: null });
 
   const isApprover = roles.includes("approver");
   const isEditor = roles.includes("editor") || isApprover;
@@ -154,8 +157,57 @@ function Dashboard({ session }: { session: Session }) {
     return r ? { day_rate: r.day_rate, leave_rate: r.leave_rate } : null;
   }, [isApprover, period, frozen, rates]);
 
+  // Zlecenia z Rokos (tabela route_history, import na /import) — z 60-dniowym
+  // zapasem przed miesiącem, bo zlecenie rozpoczęte wcześniej może trwać w miesiącu.
+  const loadOrders = useCallback(async (y: number, m: number) => {
+    const from = new Date(Date.UTC(y, m - 1, 1) - 60 * 864e5).toISOString().slice(0, 10);
+    const to = lastOfMonth(y, m);
+    const fetchAll = async (sel: string) => {
+      const rows: RokosOrder[] = [];
+      for (let off = 0; ; off += 1000) {
+        const { data, error } = await supabase.from("route_history").select(sel)
+          .gte("pickup_date", from).lte("pickup_date", to).order("order_number").range(off, off + 999);
+        if (error) return { error, rows: [] as RokosOrder[] };
+        rows.push(...((data ?? []) as unknown as RokosOrder[]));
+        if (!data || data.length < 1000) break;
+      }
+      return { error: null, rows };
+    };
+    // kolumny rzeczywistych dat dodaje migracja 031; bez niej czytamy daty planowane
+    let r = await fetchAll("order_number,driver_name,pickup_date,delivery_date,pickup_actual,delivery_actual,carrier_name,created_at");
+    let actualCols = true;
+    if (r.error) {
+      actualCols = false;
+      r = await fetchAll("order_number,driver_name,pickup_date,delivery_date,carrier_name,created_at");
+    }
+    setOrdersMeta({ actualCols, error: r.error ? r.error.message : null });
+    setOrders(r.rows.map((o) => ({ ...o, pickup_actual: o.pickup_actual ?? null, delivery_actual: o.delivery_actual ?? null })));
+  }, []);
+  useEffect(() => {
+    if (period) loadOrders(period.year, period.month); else setOrders([]);
+  }, [period?.year, period?.month, loadOrders]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const sug = useMemo(() => period ? suggestDays(orders, people, period.year, period.month)
+    : { byPerson: new Map<string, DaySuggestion>(), unmatched: [] as { name: string; days: number }[] }, [orders, people, period]);
+  const rokosInfo = useMemo(() => {
+    if (!period) return null;
+    const m0 = firstOfMonth(period.year, period.month), m1 = lastOfMonth(period.year, period.month);
+    const inMonth = orders.filter((o) => {
+      const a = o.pickup_actual ?? o.pickup_date; if (!a) return false;
+      const b = o.delivery_actual ?? o.delivery_date ?? a;
+      return b >= m0 && a <= m1;
+    });
+    const lastAdded = inMonth.map((o) => o.created_at ?? "").filter(Boolean).sort().pop() ?? null;
+    return {
+      count: inMonth.length, lastAdded,
+      actualOk: inMonth.some((o) => o.pickup_actual),
+      // ostatnie zlecenie dodane do bazy ponad 2 dni przed końcem miesiąca = import mógł być zrobiony za wcześnie
+      stale: lastAdded !== null && lastAdded.slice(0, 10) < new Date(Date.parse(m1) - 2 * 864e5).toISOString().slice(0, 10),
+    };
+  }, [orders, period]);
+
   const issues = useMemo<Issue[]>(() => period
-    ? validatePeriod({ period, people, lines, entries, rateOf: isApprover ? rateOf : null }) : [], [period, people, lines, entries, rateOf, isApprover]);
+    ? validatePeriod({ period, people, lines, entries, rateOf: isApprover ? rateOf : null, suggestions: sug.byPerson }) : [], [period, people, lines, entries, rateOf, isApprover, sug]);
   const nameOf = (id: string | null) => (id ? profiles[id]?.display_name ?? profiles[id]?.email ?? id.slice(0, 8) : "—");
 
   if (rolesLoaded && roles.length === 0 && !loadError) {
@@ -206,6 +258,7 @@ function Dashboard({ session }: { session: Session }) {
               session={session} isApprover={isApprover} isEditor={isEditor}
               periods={periods} period={period} setPeriodId={setPeriodId}
               people={people} lines={lines} entries={entries} issues={issues} rateOf={rateOf} rates={rates}
+              suggestions={sug.byPerson} unmatched={sug.unmatched} rokosInfo={rokosInfo} ordersMeta={ordersMeta}
               busy={busy} setBusy={setBusy} nameOf={nameOf}
               reloadBase={loadBase} reloadPeriod={loadPeriod}
             />
@@ -231,6 +284,9 @@ function MonthTab(props: {
   session: Session; isApprover: boolean; isEditor: boolean;
   periods: Period[]; period: Period | null; setPeriodId: (id: string) => void;
   people: Person[]; lines: Line[]; entries: Entry[]; issues: Issue[];
+  suggestions: Map<string, DaySuggestion>; unmatched: { name: string; days: number }[];
+  rokosInfo: { count: number; lastAdded: string | null; actualOk: boolean; stale: boolean } | null;
+  ordersMeta: { actualCols: boolean; error: string | null };
   rateOf: (personId: string) => { day_rate: number; leave_rate: number } | null; rates: Rate[];
   busy: boolean; setBusy: (b: boolean) => void; nameOf: (id: string | null) => string;
   reloadBase: () => Promise<void>; reloadPeriod: () => Promise<void>;
@@ -271,6 +327,19 @@ function MonthTab(props: {
     };
     const { error } = await supabase.from("payroll_lines").upsert(row, { onConflict: "period_id,person_id" });
     if (error) { alert(`${fullName(person)}: ${error.message}`); }
+    await props.reloadPeriod();
+  }
+
+  const missingSug = people.filter((p) => p.active && !lineBy.has(p.id) && (props.suggestions.get(p.id)?.days ?? 0) > 0);
+  async function fillFromRokos() {
+    if (!period || missingSug.length === 0) return;
+    if (!confirm(`Wpisać dni pracy z Rokos dla ${missingSug.length} kierowców bez wpisu? Urlopy i chorobowe wpisz potem ręcznie.`)) return;
+    setBusy(true);
+    const { error } = await supabase.from("payroll_lines").upsert(
+      missingSug.map((p) => ({ period_id: period.id, person_id: p.id, days_worked: props.suggestions.get(p.id)!.days, days_leave: 0, days_sick: 0 })),
+      { onConflict: "period_id,person_id" });
+    setBusy(false);
+    if (error) alert("Nie udało się wpisać dni: " + error.message);
     await props.reloadPeriod();
   }
 
@@ -410,6 +479,9 @@ function MonthTab(props: {
             </div>
           )}
 
+          <RokosBanner info={props.rokosInfo} meta={props.ordersMeta} unmatched={props.unmatched}
+            canFill={editable && missingSug.length > 0} nFill={missingSug.length} busy={busy} onFill={fillFromRokos} />
+
           <div className="card !p-0 overflow-x-auto">
             <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 text-sm">
               <span className="text-slate-500">{periodLabel(period.year, period.month)} · {dim} dni w miesiącu{editable ? "" : " · tylko podgląd"}</span>
@@ -420,6 +492,7 @@ function MonthTab(props: {
                 <tr>
                   <th className="text-left px-3 py-2">Kierowca</th>
                   <th className="px-2 py-2">Dni pracy</th><th className="px-2 py-2">Urlop</th><th className="px-2 py-2">Chorobowe</th>
+                  <th className="px-2 py-2" title="Dni pracy wg zleceń z Rokos (sugestia)">Rokos</th>
                   <th className="px-2 py-2">Razem dni</th>
                   <th className="text-right px-3 py-2">Uznania</th><th className="text-right px-3 py-2">Potrącenia</th>
                   {isApprover && <><th className="text-right px-3 py-2">Stawka</th><th className="text-right px-3 py-2">Do wypłaty</th></>}
@@ -444,6 +517,21 @@ function MonthTab(props: {
                             <DayInput value={l ? l[f] : null} max={dim} disabled={!editable} onCommit={(v) => saveDays(p, { [f]: v })} />
                           </td>
                         ))}
+                        <td className="px-2 py-1.5 text-center whitespace-nowrap">
+                          {(() => {
+                            const s = props.suggestions.get(p.id);
+                            if (!s) return <span className="text-slate-300">—</span>;
+                            const off = Math.abs((l?.days_worked ?? 0) - s.days) > SUGGESTION_TOLERANCE;
+                            return (
+                              <>
+                                <span className={off ? "text-amber-700 font-semibold" : "text-slate-500"} title={`${s.orders} zleceń, ${s.filled} dni z wypełnionych przerw (${s.first} – ${s.last})`}>{s.days}</span>
+                                {editable && (!l || l.days_worked !== s.days) && (
+                                  <button className="ml-1 text-blue-600 text-xs hover:underline" onClick={() => saveDays(p, { days_worked: s.days })}>wpisz</button>
+                                )}
+                              </>
+                            );
+                          })()}
+                        </td>
                         <td className={`px-2 py-1.5 text-center ${sum > dim ? "text-red-600 font-bold" : "text-slate-500"}`}>{l ? sum : "—"}</td>
                         <td className="px-3 py-1.5 text-right tabular-nums">{c.credits ? fmtPln(c.credits) : "—"}</td>
                         <td className={`px-3 py-1.5 text-right tabular-nums ${c.deductions ? "text-red-600" : ""}`}>{c.deductions ? fmtPln(c.deductions) : "—"}</td>
@@ -459,7 +547,7 @@ function MonthTab(props: {
                       </tr>
                       {expanded === p.id && (
                         <tr className="bg-slate-50/70">
-                          <td colSpan={isApprover ? 10 : 8} className="px-4 py-3">
+                          <td colSpan={isApprover ? 11 : 9} className="px-4 py-3">
                             <EntriesPanel person={p} period={period} entries={es} editable={editable} issues={pIssues}
                               note={l?.note ?? ""} onNote={async (v) => { await saveDaysNote(p, v); }} onChanged={props.reloadPeriod} />
                           </td>
@@ -489,6 +577,36 @@ function MonthTab(props: {
     if (error) alert(error.message);
     await props.reloadPeriod();
   }
+}
+
+function RokosBanner({ info, meta, unmatched, canFill, nFill, busy, onFill }: {
+  info: { count: number; lastAdded: string | null; actualOk: boolean; stale: boolean } | null;
+  meta: { actualCols: boolean; error: string | null };
+  unmatched: { name: string; days: number }[]; canFill: boolean; nFill: number; busy: boolean; onFill: () => void;
+}) {
+  if (!info) return null;
+  const warns: string[] = [];
+  if (meta.error) warns.push("Nie udało się odczytać zleceń z Rokos: " + meta.error);
+  if (info.count === 0 && !meta.error) warns.push("W bazie nie ma zleceń z Rokos z tego miesiąca — wczytaj rejestr transportów na /import.");
+  if (info.stale) warns.push(`Ostatnie zlecenie z tego miesiąca dodano do bazy ${info.lastAdded ? new Date(info.lastAdded).toLocaleDateString("pl-PL") : "—"}, przed końcem miesiąca. Zlecenia z końca miesiąca mogą brakować — wczytaj aktualny rejestr transportów na /import.`);
+  if (!meta.actualCols) warns.push("Baza nie ma jeszcze kolumn z rzeczywistymi datami (migracja 031) — sugestia liczy się z dat planowanych.");
+  else if (info.count > 0 && !info.actualOk) warns.push("Zlecenia w bazie nie mają rzeczywistych dat podjęcia i dostawy — wczytaj rejestr transportów ponownie (po migracji 031), a sugestia będzie dokładniejsza.");
+  return (
+    <div className="card space-y-2 text-sm">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-slate-600"><b>Rokos:</b> {info.count} zleceń w tym miesiącu. Kolumna „Rokos” to sugestia dni pracy (dni ze zleceniem, przerwy do 2 dni wypełnione); urlopy i chorobowe wpisujesz ręcznie.</span>
+        <div className="flex-1" />
+        {canFill && <button className="btn-secondary" disabled={busy} onClick={onFill}>Wpisz dni z Rokos dla {nFill} bez wpisu</button>}
+      </div>
+      {warns.map((w, i) => <div key={i} className="text-amber-700">Uwaga: {w}</div>)}
+      {unmatched.length > 0 && (
+        <details className="text-slate-600">
+          <summary className="cursor-pointer">W Rokos są kierowcy bez osoby w bazie rozliczeń: {unmatched.length} (mogą to być podwykonawcy)</summary>
+          <div className="mt-1 text-xs">{unmatched.map((u) => `${u.name} (${u.days} dni)`).join("; ")}. Dopisz własnych kierowców w zakładce „Osoby i stawki”.</div>
+        </details>
+      )}
+    </div>
+  );
 }
 
 function RowBlock({ children }: { children: React.ReactNode }) { return <>{children}</>; }

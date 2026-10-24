@@ -90,14 +90,114 @@ export function computeLine(
   return { workAmount, leaveAmount, credits, deductions, total: round2(workAmount + leaveAmount + credits + deductions) };
 }
 
+// ── Sugestia dni pracy z Rokos (rejestr transportów) ──────────
+// Dzień = dzień objęty zleceniem kierowcy (od podjęcia do dostawy, daty
+// rzeczywiste, a gdy ich brak — planowane). Przerwy do GAP_FILL_DAYS dni
+// między dniami ze zleceniem są wypełniane (postój przed załadunkiem, weekend
+// po rozładunku). Reguła sprawdzona na wypłatach za czerwiec 2026: dokładnie
+// zgodna u 40 z 55 kierowców, w granicach ±1 dzień u 48. Urlopów i chorobowego
+// Rokos nie zna — to sugestia do porównania z wpisem, nie zastępuje go.
+export const GAP_FILL_DAYS = 2;
+export const SUGGESTION_TOLERANCE = 2;
+
+export interface RokosOrder {
+  order_number: string | null; driver_name: string | null;
+  pickup_date: string | null; delivery_date: string | null;
+  pickup_actual: string | null; delivery_actual: string | null;
+  carrier_name?: string | null; // przewoźnik zlecenia; kierowcy podwykonawców nie są rozliczani
+  created_at?: string | null;
+}
+export interface DaySuggestion { days: number; filled: number; orders: number; first: string; last: string }
+
+const addDaysIso = (s: string, n: number) => {
+  const d = new Date(s + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10);
+};
+export function nameTokens(s: string): string[] {
+  return s.toUpperCase().replace(/Ł/g, "L").normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^A-Z ]/g, " ").split(/\s+/).filter(Boolean);
+}
+function lev(a: string, b: string): number {
+  const d: number[][] = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++)
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
+}
+/** Dopasowanie nazwy kierowcy z Rokos ("NAZWISKO IMIĘ") do osoby: najpierw zbiór słów, potem literówka (1 znak). */
+export function makePersonMatcher(people: Person[]): (driverName: string) => Person | null {
+  const keyOf = (t: string[]) => [...t].sort().join(" ");
+  const exact = new Map<string, Person | null>();
+  const toks = people.map((p) => ({ p, t: nameTokens(`${p.last_name} ${p.first_name}`) }));
+  toks.forEach(({ p, t }) => { const k = keyOf(t); exact.set(k, exact.has(k) ? null : p); });
+  const cache = new Map<string, Person | null>();
+  return (driverName: string) => {
+    if (cache.has(driverName)) return cache.get(driverName)!;
+    const t = nameTokens(driverName);
+    let hit: Person | null = exact.get(keyOf(t)) ?? null;
+    if (!hit && t.length >= 2) {
+      const cands = toks.filter((x) => x.t.length === t.length && (() => {
+        const rest = [...x.t];
+        return t.every((w) => {
+          const i = rest.findIndex((r) => r === w || (w.length >= 5 && r.length >= 5 && lev(r, w) <= 1));
+          if (i < 0) return false; rest.splice(i, 1); return true;
+        });
+      })());
+      if (cands.length === 1) hit = cands[0].p;
+    }
+    cache.set(driverName, hit);
+    return hit;
+  };
+}
+
+export function suggestDays(orders: RokosOrder[], people: Person[], year: number, month: number): {
+  byPerson: Map<string, DaySuggestion>; unmatched: { name: string; days: number }[];
+} {
+  const m0 = firstOfMonth(year, month), m1 = lastOfMonth(year, month);
+  const match = makePersonMatcher(people);
+  const groups = new Map<string, { person: Person | null; name: string; days: Set<string>; orders: number }>();
+  for (const o of orders) {
+    if (!o.driver_name) continue;
+    if (o.carrier_name && !/B&M.{0,2}INVEST/i.test(o.carrier_name)) continue; // podwykonawca
+    const a = o.pickup_actual ?? o.pickup_date;
+    if (!a) continue;
+    let b = o.delivery_actual ?? o.delivery_date ?? a;
+    if (b < a) b = a;
+    if (b < m0 || a > m1) continue;
+    const person = match(o.driver_name);
+    const key = person ? person.id : "?" + nameTokens(o.driver_name).sort().join(" ");
+    const g = groups.get(key) ?? { person, name: o.driver_name.trim(), days: new Set<string>(), orders: 0 };
+    for (let d = a < m0 ? m0 : a; d <= (b > m1 ? m1 : b); d = addDaysIso(d, 1)) g.days.add(d);
+    g.orders++;
+    groups.set(key, g);
+  }
+  const byPerson = new Map<string, DaySuggestion>();
+  const unmatched: { name: string; days: number }[] = [];
+  groups.forEach((g) => {
+    const sorted = [...g.days].sort();
+    const all = new Set(sorted);
+    for (let i = 1; i < sorted.length; i++) {
+      const gap = Math.round((Date.parse(sorted[i]) - Date.parse(sorted[i - 1])) / 864e5) - 1;
+      if (gap > 0 && gap <= GAP_FILL_DAYS) for (let k = 1; k <= gap; k++) all.add(addDaysIso(sorted[i - 1], k));
+    }
+    if (g.person) byPerson.set(g.person.id, { days: all.size, filled: all.size - sorted.length, orders: g.orders, first: sorted[0], last: sorted[sorted.length - 1] });
+    else unmatched.push({ name: g.name, days: all.size });
+  });
+  unmatched.sort((x, y) => y.days - x.days);
+  return { byPerson, unmatched };
+}
+export const firstOfMonth = (y: number, m: number) => `${y}-${String(m).padStart(2, "0")}-01`;
+export const lastOfMonth = (y: number, m: number) => `${y}-${String(m).padStart(2, "0")}-${String(daysInMonth(y, m)).padStart(2, "0")}`;
+
 // ── Walidacje ────────────────────────────────────────────────
 export interface Issue { level: "error" | "warn"; personId?: string; text: string }
 
 export function validatePeriod(args: {
   period: Period; people: Person[]; lines: Line[]; entries: Entry[];
   rateOf: ((personId: string) => { day_rate: number; leave_rate: number } | null) | null; // null = brak wglądu w stawki
+  suggestions?: Map<string, DaySuggestion>; // sugestia dni z Rokos (opcjonalna)
 }): Issue[] {
-  const { period, people, lines, entries, rateOf } = args;
+  const { period, people, lines, entries, rateOf, suggestions } = args;
   const dim = daysInMonth(period.year, period.month);
   const out: Issue[] = [];
   const lineBy = new Map(lines.map((l) => [l.person_id, l]));
@@ -106,11 +206,16 @@ export function validatePeriod(args: {
     const es = entries.filter((e) => e.person_id === p.id);
     const name = fullName(p);
     if (!p.active && !l && es.length === 0) continue;
+    const sug = suggestions?.get(p.id);
     if (!l) {
-      if (p.active) out.push({ level: "warn", personId: p.id, text: `${name}: nie wpisano dni (jeśli kierowca nie pracował w tym miesiącu, wpisz 0).` });
+      if (p.active) out.push({ level: "warn", personId: p.id, text: `${name}: nie wpisano dni${sug ? ` (Rokos: ${sug.days} dni ze ${sug.orders} zleceń)` : " (jeśli kierowca nie pracował w tym miesiącu, wpisz 0)"}.` });
       continue;
     }
     const sum = l.days_worked + l.days_leave + l.days_sick;
+    if (sug && Math.abs(l.days_worked - sug.days) > SUGGESTION_TOLERANCE)
+      out.push({ level: "warn", personId: p.id, text: `${name}: wpisano ${l.days_worked} dni pracy, a Rokos sugeruje ${sug.days} (${sug.orders} zleceń). Sprawdź urlop, chorobowe lub zlecenia.` });
+    if (!sug && l.days_worked > 0 && suggestions && suggestions.size > 0)
+      out.push({ level: "warn", personId: p.id, text: `${name}: wpisano ${l.days_worked} dni pracy, a w Rokos nie ma zleceń tego kierowcy w tym miesiącu.` });
     if (sum > dim) out.push({ level: "error", personId: p.id, text: `${name}: dni pracy + urlop + chorobowe = ${sum}, a miesiąc ma ${dim} dni.` });
     if (l.days_sick > 0) out.push({ level: "warn", personId: p.id, text: `${name}: ${l.days_sick} dni chorobowego. W wyliczeniu są nieodpłatne — potwierdź z Ozar, kto je płaci.` });
     if (sum === 0 && es.length > 0) out.push({ level: "warn", personId: p.id, text: `${name}: pozycje uznań/potrąceń przy 0 dni.` });
