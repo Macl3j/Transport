@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import * as XLSX from "xlsx";
 import type { AuthSession as Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
+import { replaceCostInvoices, errMsg } from "@/lib/costImport";
 
 // ── Typy ─────────────────────────────────────────────────────
 type CreditorCategory = "leasing" | "kredyt" | "dostawca" | "wynagrodzenia" | "inne";
@@ -119,17 +120,6 @@ function strOrNull(v: unknown): string | null {
   const s = String(v).trim();
   return s === "" ? null : s;
 }
-// Kolumna cost_invoices.odbiorca pochodzi z migracji 032 (Cashflow). Gdy jej jeszcze nie
-// ma w bazie, zapisujemy faktury jak dotąd, bez odbiorcy.
-async function insertCostBatch(batch: object[]) {
-  let res = await supabase.from("cost_invoices").insert(batch as never[]);
-  if (res.error && /odbiorca/i.test(res.error.message)) {
-    const stripped = (batch as Record<string, unknown>[]).map((r) => { const { odbiorca: _o, ...rest } = r; void _o; return rest; });
-    res = await supabase.from("cost_invoices").insert(stripped as never[]);
-  }
-  return res;
-}
-
 function parseCostFile(buffer: ArrayBuffer): { rows: CostInvoiceRow[]; error?: string } {
   const wb = XLSX.read(new Uint8Array(buffer), { type: "array", cellDates: true });
   let sheetName = wb.SheetNames.includes("Sheet") ? "Sheet" : wb.SheetNames[0];
@@ -364,19 +354,12 @@ function WindykacjaDashboard({ session }: { session: Session }) {
         if (rows.length === 0) { setImportMsg({ ok: false, text: "Brak wierszy do zaimportowania." }); setImporting(false); return; }
 
         // Import zastępuje pełny zbiór w cost_invoices — plik to zawsze aktualny, pełny eksport.
-        const { error: delErr } = await supabase.from("cost_invoices").delete().gte("imported_at", "1900-01-01");
-        if (delErr) throw delErr;
-        let imported = 0;
-        for (let i = 0; i < rows.length; i += 500) {
-          const batch = rows.slice(i, i + 500);
-          const { error: insErr } = await insertCostBatch(batch);
-          if (insErr) throw insErr;
-          imported += batch.length;
-        }
+        // Bezpiecznie: najpierw zapis nowych, dopiero potem usunięcie starych (patrz lib/costImport.ts).
+        const { imported } = await replaceCostInvoices(supabase, rows);
         setImportMsg({ ok: true, text: `Zaimportowano ${imported} faktur do rejestru kosztów. Lista sugestii niżej odświeżona.` });
         await computeSuggestions(creditors);
       } catch (err: unknown) {
-        setImportMsg({ ok: false, text: `Błąd importu: ${err instanceof Error ? err.message : String(err)}` });
+        setImportMsg({ ok: false, text: `Błąd importu: ${errMsg(err)}` });
       } finally {
         setImporting(false);
       }

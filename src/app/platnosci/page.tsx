@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
+import { replaceCostInvoices, errMsg } from "@/lib/costImport";
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -84,17 +85,6 @@ function percentile(sorted: number[], p: number): number {
 }
 
 // ── Import — parsowanie eksportu faktur kosztowych ─────────────
-// Kolumna cost_invoices.odbiorca pochodzi z migracji 032 (Cashflow). Gdy jej jeszcze nie
-// ma w bazie, zapisujemy faktury jak dotąd, bez odbiorcy.
-async function insertCostBatch(batch: object[]) {
-  let res = await supabase.from("cost_invoices").insert(batch as never[]);
-  if (res.error && /odbiorca/i.test(res.error.message)) {
-    const stripped = (batch as Record<string, unknown>[]).map((r) => { const { odbiorca: _o, ...rest } = r; void _o; return rest; });
-    res = await supabase.from("cost_invoices").insert(stripped as never[]);
-  }
-  return res;
-}
-
 function parseCostFile(buffer: ArrayBuffer): { rows: Omit<CostInvoice, "id">[]; error?: string } {
   const wb = XLSX.read(new Uint8Array(buffer), { type: "array", cellDates: true });
   // Preferuj arkusz "Sheet" (surowe dane), fallback: arkusz z największą liczbą wierszy
@@ -261,20 +251,12 @@ export default function PlatnosciPage() {
         if (rows.length === 0) { setImportMsg({ ok: false, text: "Brak wierszy do zaimportowania." }); setImporting(false); return; }
 
         // Import zastępuje pełny zbiór — plik to zawsze aktualny, pełny eksport.
-        const { error: delErr } = await supabase.from("cost_invoices").delete().gte("imported_at", "1900-01-01");
-        if (delErr) throw delErr;
-
-        let imported = 0;
-        for (let i = 0; i < rows.length; i += 500) {
-          const batch = rows.slice(i, i + 500);
-          const { error: insErr } = await insertCostBatch(batch);
-          if (insErr) throw insErr;
-          imported += batch.length;
-        }
-        setImportMsg({ ok: true, text: `Zaimportowano ${imported} faktur (arkusz rozpoznany automatycznie).` });
+        // Bezpiecznie: najpierw zapis nowych, dopiero potem usunięcie starych (patrz lib/costImport.ts).
+        const { imported, skippedNoNumber } = await replaceCostInvoices(supabase, rows);
+        setImportMsg({ ok: true, text: `Zaimportowano ${imported} faktur (arkusz rozpoznany automatycznie)${skippedNoNumber ? `; pominięto ${skippedNoNumber} wiersz bez numeru (suma na dole eksportu)` : ""}.` });
         await loadInvoices();
       } catch (err: unknown) {
-        setImportMsg({ ok: false, text: `Błąd importu: ${err instanceof Error ? err.message : String(err)}` });
+        setImportMsg({ ok: false, text: `Błąd importu: ${errMsg(err)}` });
       } finally {
         setImporting(false);
       }
