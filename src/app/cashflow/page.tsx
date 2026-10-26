@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import type { AuthSession as Session } from "@supabase/supabase-js";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
+import { useSettings } from "@/lib/settings-context";
 import {
   type PayInvoice, type RecvInvoice, type CashflowOptions, type ReceivableRow, type WeekRow,
   buildCashflow, parseReceivablesWorkbook, addDays, daysBetween, round2,
@@ -25,6 +26,7 @@ const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${Stri
 const num = (s: string) => { const n = parseFloat(s.replace(/\s/g, "").replace(",", ".")); return isNaN(n) ? null : n; };
 
 interface CostRow { numer: string | null; sprzedawca: string | null; typ_kosztu: string | null; termin_platnosci: string | null; pozostalo_do_zaplaty_pln: number | null; odbiorca?: string | null }
+interface Snap { id: string; account: string; currency: "PLN" | "EUR"; amount: number; as_of: string; created_at: string }
 interface RecvRow { numer: string; kontrahent: string | null; termin_platnosci: string | null; data_wystawienia: string | null; pozostalo_pln: number | null; faktor: string | null }
 
 export default function CashflowPage() {
@@ -95,6 +97,9 @@ function Dashboard({ session }: { session: Session }) {
   const [overduePay, setOverduePay] = useState(0);
   const [overdueRecv, setOverdueRecv] = useState(0);
   const [opening, setOpening] = useState("");
+  const { settings } = useSettings();
+  const [snaps, setSnaps] = useState<Snap[]>([]);
+  const [eurStr, setEurStr] = useState("");
   const [perStarted, setPerStarted] = useState(true);
 
   const load = useCallback(async () => {
@@ -121,6 +126,11 @@ function Dashboard({ session }: { session: Session }) {
       one("cost_invoices", "imported_at"), one("cost_invoices", "data_wystawienia"),
       one("receivable_invoices", "imported_at"), one("receivable_invoices", "data_wystawienia"),
     ]);
+    const bal = await supabase.from("cash_balances").select("id,account,currency,amount,as_of,created_at")
+      .order("as_of", { ascending: false }).order("created_at", { ascending: false }).limit(500);
+    if (bal.error) errs.push(/does not exist|schema cache/.test(bal.error.message)
+      ? "Brak tabeli sald kont — uruchom migrację 033_cash_balances.sql w Supabase Studio." : "Salda kont: " + bal.error.message);
+    setSnaps(((bal.data ?? []) as Snap[]).map((x) => ({ ...x, amount: Number(x.amount) })));
     setCost(c.rows); setRecv(r.rows); setErrors(errs);
     setMeta({ costImport: ci, costLatest: cl, hasOdbiorca: hasOdb && c.rows.some((x) => x.odbiorca), recvImport: ri, recvLatest: rl });
     setLoading(false);
@@ -145,9 +155,18 @@ function Dashboard({ session }: { session: Session }) {
     return { pay: p, excludedKravtt: excl, recvInv: rv, noDueRecv: noDue };
   }, [cost, recv]);
 
+  // najnowszy zapis salda dla każdego konta; EUR przeliczane po kursie (domyślnie z ustawień aplikacji)
+  const eurRate = num(eurStr) ?? settings.plnEurRate;
+  const latest = useMemo(() => {
+    const m = new Map<string, Snap>();
+    for (const s of snaps) if (!m.has(s.account)) m.set(s.account, s); // snaps są posortowane od najnowszych
+    return [...m.values()].sort((a, b) => a.account.localeCompare(b.account, "pl"));
+  }, [snaps]);
+  const totalPln = useMemo(() => round2(latest.reduce((s, x) => s + (x.currency === "EUR" ? x.amount * eurRate : x.amount), 0)), [latest, eurRate]);
+
   const opts: CashflowOptions = useMemo(() => ({
-    today, weeks, overduePayWeeks: overduePay, overdueRecvWeeks: overdueRecv, opening: num(opening) ?? 0, ifisPerStarted: perStarted,
-  }), [today, weeks, overduePay, overdueRecv, opening, perStarted]);
+    today, weeks, overduePayWeeks: overduePay, overdueRecvWeeks: overdueRecv, opening: totalPln + (num(opening) ?? 0), ifisPerStarted: perStarted,
+  }), [today, weeks, overduePay, overdueRecv, opening, perStarted, totalPln]);
   const cf = useMemo(() => buildCashflow(pay, recvInv, opts), [pay, recvInv, opts]);
 
   const ageDays = (iso: string | null) => (iso ? daysBetween(iso.slice(0, 10), today) : null);
@@ -166,6 +185,9 @@ function Dashboard({ session }: { session: Session }) {
       ...[...pay].sort((a, b) => a.termin.localeCompare(b.termin)).map((p) => [p.numer, p.kontrahent, p.kategoria ?? "", p.termin, p.kwota, wk(p.termin)])]), "Do zapłaty");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["Numer", "Klient", "Data wystawienia", "Termin", "Kwota do otrzymania zł", "Faktor", "Tydzień"],
       ...[...recvInv].sort((a, b) => a.termin.localeCompare(b.termin)).map((c) => [c.numer, c.kontrahent, c.wystawiona ?? "", c.termin, c.kwota, c.faktor ?? "", wk(c.termin)])]), "Do otrzymania");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["Konto", "Waluta", "Saldo", "Na dzień", "Wartość zł"],
+      ...latest.map((x) => [x.account, x.currency, x.amount, x.as_of, round2(x.currency === "EUR" ? x.amount * eurRate : x.amount)]),
+      ["Razem zł", "", "", "", totalPln], ["Kurs EUR/PLN", "", "", "", eurRate]]), "Salda kont");
     XLSX.writeFile(wb, `Cashflow_${today}.xlsx`);
   }
 
@@ -204,6 +226,9 @@ function Dashboard({ session }: { session: Session }) {
             </div>
           )}
 
+          <BalancesCard latest={latest} eurRate={eurRate} eurStr={eurStr} setEurStr={setEurStr} defaultEur={settings.plnEurRate}
+            totalPln={totalPln} today={today} onChanged={load} />
+
           <div className="card flex flex-wrap items-end gap-4">
             <div><label className="label">Tygodni w tabeli</label>
               <select className="input-field !w-24" value={weeks} onChange={(e) => setWeeks(Number(e.target.value))}>{[4, 8, 13, 26].map((n) => <option key={n}>{n}</option>)}</select></div>
@@ -211,7 +236,7 @@ function Dashboard({ session }: { session: Session }) {
               <input className="input-field !w-28" type="number" min={0} max={weeks} value={overduePay} onChange={(e) => setOverduePay(Math.max(0, Math.min(weeks, Number(e.target.value) || 0)))} /></div>
             <div><label className="label">Zaległe należności wpłyną w (tyg.)</label>
               <input className="input-field !w-28" type="number" min={0} max={weeks} value={overdueRecv} onChange={(e) => setOverdueRecv(Math.max(0, Math.min(weeks, Number(e.target.value) || 0)))} /></div>
-            <div><label className="label">Gotówka na dziś (zł)</label>
+            <div><label className="label">Korekta gotówki (zł)</label>
               <input className="input-field !w-36" inputMode="decimal" value={opening} placeholder="0" onChange={(e) => setOpening(e.target.value)} /></div>
             <label className="flex items-center gap-2 text-sm text-slate-600 pb-2"><input type="checkbox" checked={perStarted} onChange={(e) => setPerStarted(e.target.checked)} /> opłata IFIS za każde rozpoczęte 30 dni</label>
             <div className="text-xs text-slate-400 w-full">0 tygodni = zaległości zostają w osobnym wierszu „po terminie” i nie wchodzą do salda tygodniowego. Wpisz liczbę tygodni, żeby założyć ich zapłatę lub wpływ równymi częściami.</div>
@@ -357,6 +382,84 @@ function DetailRow({ pay, recv, ifis }: { pay: PayInvoice[]; recv: RecvInvoice[]
         </div>
       </td>
     </tr>
+  );
+}
+
+function BalancesCard({ latest, eurRate, eurStr, setEurStr, defaultEur, totalPln, today, onChanged }: {
+  latest: Snap[]; eurRate: number; eurStr: string; setEurStr: (s: string) => void; defaultEur: number;
+  totalPln: number; today: string; onChanged: () => Promise<void>;
+}) {
+  const [account, setAccount] = useState("");
+  const [currency, setCurrency] = useState<"PLN" | "EUR">("PLN");
+  const [amount, setAmount] = useState("");
+  const [asOf, setAsOf] = useState(today);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  function pick(name: string) {
+    setAccount(name);
+    const ex = latest.find((x) => x.account === name);
+    if (ex) setCurrency(ex.currency);
+  }
+  async function save() {
+    const a = num(amount);
+    if (!account.trim()) { setErr("Podaj nazwę konta, np. „mBank PLN”."); return; }
+    if (a == null) { setErr("Podaj saldo (liczba, może być ujemna)."); return; }
+    setBusy(true); setErr(null);
+    const { error } = await supabase.from("cash_balances").insert({ account: account.trim(), currency, amount: a, as_of: asOf });
+    setBusy(false);
+    if (error) { setErr(/does not exist|schema cache/.test(error.message) ? "Brak tabeli sald kont — uruchom migrację 033_cash_balances.sql w Supabase Studio." : error.message); return; }
+    setAmount("");
+    await onChanged();
+  }
+  async function undo(id: string) {
+    if (!confirm("Usunąć ten zapis salda? Poprzedni zapis tego konta znów będzie obowiązywał.")) return;
+    const { error } = await supabase.from("cash_balances").delete().eq("id", id);
+    if (error) setErr(error.message);
+    await onChanged();
+  }
+  const age = (d: string) => Math.round((Date.parse(today + "T12:00:00Z") - Date.parse(d + "T12:00:00Z")) / 864e5);
+
+  return (
+    <div className="card space-y-3 text-sm">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="font-semibold text-slate-800">Salda kont</h2>
+        <div className="text-slate-600">Gotówka razem: <b className="tabular-nums">{fmt0(totalPln)} zł</b></div>
+      </div>
+      {latest.length === 0 ? <div className="text-slate-400">Brak zapisanych sald. Dodaj saldo każdego konta poniżej; salda są pamiętane, więc wystarczy aktualizować je, gdy się zmienią.</div> : (
+        <table className="w-full text-sm">
+          <thead className="text-xs text-slate-500"><tr>
+            <th className="text-left py-1">Konto</th><th className="text-right">Saldo</th><th className="text-right">Wartość zł</th><th className="text-left pl-4">Na dzień</th><th /></tr></thead>
+          <tbody>
+            {latest.map((x) => (
+              <tr key={x.id} className="border-t border-slate-100">
+                <td className="py-1.5">{x.account}</td>
+                <td className="text-right tabular-nums">{fmt0(x.amount)} {x.currency}</td>
+                <td className="text-right tabular-nums">{fmt0(x.currency === "EUR" ? x.amount * eurRate : x.amount)}</td>
+                <td className={`pl-4 ${age(x.as_of) > 1 ? "text-amber-700" : "text-slate-500"}`}>{fmtDateFull(x.as_of)}{age(x.as_of) > 1 && ` (${age(x.as_of)} dni temu — zaktualizuj)`}</td>
+                <td className="text-right"><button className="text-red-500 hover:underline text-xs" onClick={() => undo(x.id)}>cofnij zapis</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div className="flex flex-wrap items-end gap-3">
+        <div><label className="label">Konto</label>
+          <input className="input-field !w-44" list="cf-accounts" value={account} placeholder="np. mBank PLN" onChange={(e) => pick(e.target.value)} />
+          <datalist id="cf-accounts">{latest.map((x) => <option key={x.id} value={x.account} />)}</datalist></div>
+        <div><label className="label">Waluta</label>
+          <select className="input-field !w-24" value={currency} onChange={(e) => setCurrency(e.target.value as "PLN" | "EUR")}><option>PLN</option><option>EUR</option></select></div>
+        <div><label className="label">Saldo</label>
+          <input className="input-field !w-36" inputMode="decimal" value={amount} placeholder="0,00" onChange={(e) => setAmount(e.target.value)} /></div>
+        <div><label className="label">Na dzień</label>
+          <input className="input-field !w-40" type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></div>
+        <button className="btn-primary" disabled={busy} onClick={save}>{busy ? "Zapisuję…" : "Zapisz saldo"}</button>
+        <div className="ml-auto"><label className="label">Kurs EUR/PLN</label>
+          <input className="input-field !w-24" inputMode="decimal" value={eurStr} placeholder={String(defaultEur)} onChange={(e) => setEurStr(e.target.value)} /></div>
+      </div>
+      {err && <div className="text-red-600">{err}</div>}
+      <div className="text-xs text-slate-400">Konto z kilkoma walutami zapisz jako osobne konta (np. „mBank PLN” i „mBank EUR”). Saldo ujemne (debet) wpisz ze znakiem minus. Kurs domyślnie pochodzi z ustawień aplikacji.</div>
+    </div>
   );
 }
 
