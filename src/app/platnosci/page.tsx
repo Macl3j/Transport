@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
-import { replaceCostInvoices, errMsg } from "@/lib/costImport";
+import { replaceCostInvoices, describeSync, errMsg } from "@/lib/costImport";
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -251,9 +251,9 @@ export default function PlatnosciPage() {
         if (rows.length === 0) { setImportMsg({ ok: false, text: "Brak wierszy do zaimportowania." }); setImporting(false); return; }
 
         // Import zastępuje pełny zbiór — plik to zawsze aktualny, pełny eksport.
-        // Bezpiecznie: najpierw zapis nowych, dopiero potem usunięcie starych (patrz lib/costImport.ts).
-        const { imported, skippedNoNumber } = await replaceCostInvoices(supabase, rows);
-        setImportMsg({ ok: true, text: `Zaimportowano ${imported} faktur (arkusz rozpoznany automatycznie)${skippedNoNumber ? `; pominięto ${skippedNoNumber} wiersz bez numeru (suma na dole eksportu)` : ""}.` });
+        // Synchronizacja: faktury aktualizowane na miejscu (akceptacje płatności zostają), patrz lib/costImport.ts.
+        const sync = await replaceCostInvoices(supabase, rows);
+        setImportMsg({ ok: true, text: `Zsynchronizowano ${describeSync(sync)}` });
         await loadInvoices();
       } catch (err: unknown) {
         setImportMsg({ ok: false, text: `Błąd importu: ${errMsg(err)}` });

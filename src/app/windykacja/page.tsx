@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import * as XLSX from "xlsx";
 import type { AuthSession as Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
-import { replaceCostInvoices, errMsg } from "@/lib/costImport";
+import { replaceCostInvoices, describeSync, errMsg } from "@/lib/costImport";
 
 // ── Typy ─────────────────────────────────────────────────────
 type CreditorCategory = "leasing" | "kredyt" | "dostawca" | "wynagrodzenia" | "inne";
@@ -354,9 +354,9 @@ function WindykacjaDashboard({ session }: { session: Session }) {
         if (rows.length === 0) { setImportMsg({ ok: false, text: "Brak wierszy do zaimportowania." }); setImporting(false); return; }
 
         // Import zastępuje pełny zbiór w cost_invoices — plik to zawsze aktualny, pełny eksport.
-        // Bezpiecznie: najpierw zapis nowych, dopiero potem usunięcie starych (patrz lib/costImport.ts).
-        const { imported } = await replaceCostInvoices(supabase, rows);
-        setImportMsg({ ok: true, text: `Zaimportowano ${imported} faktur do rejestru kosztów. Lista sugestii niżej odświeżona.` });
+        // Synchronizacja: faktury aktualizowane na miejscu (akceptacje płatności zostają), patrz lib/costImport.ts.
+        const sync = await replaceCostInvoices(supabase, rows);
+        setImportMsg({ ok: true, text: `Zsynchronizowano ${describeSync(sync)} Lista sugestii niżej odświeżona.` });
         await computeSuggestions(creditors);
       } catch (err: unknown) {
         setImportMsg({ ok: false, text: `Błąd importu: ${errMsg(err)}` });
