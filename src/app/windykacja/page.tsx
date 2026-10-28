@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import * as XLSX from "xlsx";
 import type { AuthSession as Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { replaceCostInvoices, describeSync, errMsg } from "@/lib/costImport";
+import { registerStats, sameParty, differsFromRegister, type RegInvoice, type RegStats } from "@/lib/creditorRegister";
 
 // ── Typy ─────────────────────────────────────────────────────
 type CreditorCategory = "leasing" | "kredyt" | "dostawca" | "wynagrodzenia" | "inne";
@@ -283,6 +284,9 @@ function WindykacjaDashboard({ session }: { session: Session }) {
   const [suggestions, setSuggestions] = useState<VendorSuggestion[]>([]);
   const [addingSuggestion, setAddingSuggestion] = useState<string | null>(null);
   const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set());
+  const [reg, setReg] = useState<RegInvoice[]>([]);
+  const [regMeta, setRegMeta] = useState<{ imported: string | null; latestInvoice: string | null }>({ imported: null, latestInvoice: null });
+  const [onlyDiff, setOnlyDiff] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -305,38 +309,47 @@ function WindykacjaDashboard({ session }: { session: Session }) {
 
   useEffect(() => { load(); loadProfiles(); }, [load, loadProfiles]);
 
-  // Sugestie: wierzyciele z rejestru kosztów, których jeszcze nie ma na liście.
+  // Otwarte faktury z rejestru kosztów (bez KRAVTT): podpowiedzi nowych wierzycieli ORAZ porównanie
+  // z kwotami wpisanymi ręcznie na liście wierzycieli (kolumna "rejestr" przy każdym wierzycielu).
   const computeSuggestions = useCallback(async (currentCreditors: Creditor[]) => {
-    let all: { sprzedawca: string | null; status_splaty: string | null; pozostalo_do_zaplaty_pln: number | null; termin_platnosci: string | null }[] = [];
-    let from = 0;
-    while (true) {
-      const { data, error } = await supabase
-        .from("cost_invoices")
-        .select("sprzedawca,status_splaty,pozostalo_do_zaplaty_pln,termin_platnosci")
-        .range(from, from + 999);
-      if (error || !data) break;
-      all = all.concat(data);
-      if (data.length < 1000) break;
-      from += 1000;
-    }
+    type Row = { numer: string | null; sprzedawca: string | null; termin_platnosci: string | null; pozostalo_do_zaplaty_pln: number | null; odbiorca?: string | null; imported_at?: string | null };
+    const fetchOpen = async (sel: string) => {
+      const rows: Row[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await supabase.from("cost_invoices").select(sel).gt("pozostalo_do_zaplaty_pln", 0.01).range(from, from + 999);
+        if (error) return { rows, error };
+        rows.push(...((data ?? []) as unknown as Row[]));
+        if (!data || data.length < 1000) break;
+      }
+      return { rows, error: null as null };
+    };
+    let r = await fetchOpen("numer,sprzedawca,termin_platnosci,pozostalo_do_zaplaty_pln,odbiorca,imported_at");
+    if (r.error) r = await fetchOpen("numer,sprzedawca,termin_platnosci,pozostalo_do_zaplaty_pln,imported_at"); // przed migracją 032 nie ma odbiorcy
+    const open: RegInvoice[] = r.rows
+      .filter((x) => x.numer && x.sprzedawca && !/KRAVTT/i.test(x.odbiorca ?? ""))
+      .map((x) => ({ numer: x.numer as string, sprzedawca: (x.sprzedawca as string).trim(), termin: x.termin_platnosci, kwota: x.pozostalo_do_zaplaty_pln as number }));
+    setReg(open);
+    const latest = await supabase.from("cost_invoices").select("data_wystawienia").not("data_wystawienia", "is", null).order("data_wystawienia", { ascending: false }).limit(1);
+    setRegMeta({
+      imported: r.rows.map((x) => x.imported_at ?? "").filter(Boolean).sort().pop() ?? null,
+      latestInvoice: ((latest.data ?? [])[0] as { data_wystawienia: string } | undefined)?.data_wystawienia ?? null,
+    });
+
     const today = todayStr();
-    const known = new Set(currentCreditors.map(c => c.name.trim().toLowerCase()));
     const byVendor = new Map<string, VendorSuggestion>();
-    for (const r of all) {
-      if (r.status_splaty === "Spłacony" || (r.pozostalo_do_zaplaty_pln ?? 0) <= 0.01) continue;
-      const name = (r.sprzedawca ?? "").trim();
-      if (!name || known.has(name.toLowerCase())) continue;
-      const cur = byVendor.get(name) ?? { name, total: 0, overdue: 0, maxDaysOverdue: 0, n: 0 };
-      cur.total += r.pozostalo_do_zaplaty_pln ?? 0;
+    for (const i of open) {
+      if (currentCreditors.some((c) => sameParty(c.name, i.sprzedawca))) continue; // już jest na liście
+      const cur = byVendor.get(i.sprzedawca) ?? { name: i.sprzedawca, total: 0, overdue: 0, maxDaysOverdue: 0, n: 0 };
+      cur.total += i.kwota;
       cur.n++;
-      if (r.termin_platnosci && r.termin_platnosci < today) {
-        cur.overdue += r.pozostalo_do_zaplaty_pln ?? 0;
-        const days = Math.round((new Date(today).getTime() - new Date(r.termin_platnosci).getTime()) / 86400000);
+      if (i.termin && i.termin < today) {
+        cur.overdue += i.kwota;
+        const days = Math.round((new Date(today).getTime() - new Date(i.termin).getTime()) / 86400000);
         cur.maxDaysOverdue = Math.max(cur.maxDaysOverdue, days);
       }
-      byVendor.set(name, cur);
+      byVendor.set(i.sprzedawca, cur);
     }
-    const list = [...byVendor.values()].filter(v => v.total >= 5000).sort((a, b) => b.total - a.total);
+    const list = [...byVendor.values()].filter((v) => v.total >= 5000).sort((a, b) => b.total - a.total);
     setSuggestions(list);
   }, []);
 
@@ -401,8 +414,21 @@ function WindykacjaDashboard({ session }: { session: Session }) {
     }
   }
 
+  const regByCreditor = useMemo(() => {
+    const today = todayStr();
+    return new Map<string, RegStats>(creditors.map((c) => [c.id, registerStats(c.name, reg, today)]));
+  }, [creditors, reg]);
+  const nDiff = creditors.filter((c) => {
+    const s = regByCreditor.get(c.id);
+    return c.status !== "splacone" && !!s && s.n > 0 && differsFromRegister(Number(c.total_amount_pln), s.total);
+  }).length;
+
   const filtered = creditors.filter((c) => {
     if (statusFilter !== "all" && c.status !== statusFilter) return false;
+    if (onlyDiff) {
+      const s = regByCreditor.get(c.id);
+      if (!s || s.n === 0 || !differsFromRegister(Number(c.total_amount_pln), s.total)) return false;
+    }
     if (!search.trim()) return true;
     const s = search.toLowerCase();
     return c.name.toLowerCase().includes(s) || (c.notes ?? "").toLowerCase().includes(s);
@@ -426,6 +452,11 @@ function WindykacjaDashboard({ session }: { session: Session }) {
             {overdueCount > 0 && <span className="text-red-600 font-medium"> · {overdueCount} zaległych działań</span>}
             {escalatedCount > 0 && <span className="text-red-600 font-medium"> · {escalatedCount} w windykacji</span>}
             {paidCount > 0 && <span className="text-emerald-600 font-medium"> · {paidCount} spłaconych</span>}
+          </p>
+          <p className="text-xs text-slate-400 mt-1">
+            Rejestr faktur kosztowych: import {regMeta.imported ? new Date(regMeta.imported).toLocaleDateString("pl-PL") : "—"}, najnowsza faktura {regMeta.latestInvoice ? new Date(regMeta.latestInvoice).toLocaleDateString("pl-PL") : "—"}.
+            Kwoty wierzycieli na liście są wpisywane ręcznie — rejestr pokazuje obok aktualny stan otwartych faktur.
+            {nDiff > 0 && <span className="text-amber-700 font-medium"> {nDiff} wierzycieli ma kwotę inną niż w rejestrze.</span>}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -546,6 +577,9 @@ function WindykacjaDashboard({ session }: { session: Session }) {
               ))}
             </select>
           </div>
+          <label className="flex items-center gap-2 text-sm text-slate-600 pb-2">
+            <input type="checkbox" checked={onlyDiff} onChange={(e) => setOnlyDiff(e.target.checked)} /> tylko różniące się od rejestru
+          </label>
         </div>
       </div>
 
@@ -579,6 +613,16 @@ function WindykacjaDashboard({ session }: { session: Session }) {
                     <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap gap-x-3">
                       <span className="font-mono">{fmtPLN(Number(c.total_amount_pln))}</span>
                       <span>{CATEGORY_LABELS[c.category]}</span>
+                      {(() => {
+                        const s = regByCreditor.get(c.id);
+                        if (!s || s.n === 0) return null;
+                        const d = differsFromRegister(Number(c.total_amount_pln), s.total);
+                        return (
+                          <span className={d ? "text-amber-700 font-medium" : "text-slate-400"} title={`${s.n} otwartych faktur: ${s.vendors.join(", ")}`}>
+                            rejestr: {fmtPLN(s.total)}{s.overdue > 0 && ` (po terminie ${fmtPLN(s.overdue)})`}
+                          </span>
+                        );
+                      })()}
                     </div>
                     {c.status !== "splacone" && (
                       <div className={`text-xs mt-1.5 inline-block px-2 py-0.5 rounded ${badge.cls}`}>
@@ -596,6 +640,7 @@ function WindykacjaDashboard({ session }: { session: Session }) {
           <div className="flex-1 min-w-[360px]">
             <CreditorDetail
               creditorId={selectedId}
+              register={regByCreditor.get(selectedId) ?? null}
               session={session}
               profiles={profiles}
               onClose={() => setSelectedId(null)}
@@ -612,8 +657,8 @@ function WindykacjaDashboard({ session }: { session: Session }) {
 // PANEL SZCZEGÓŁÓW WIERZYCIELA
 // ══════════════════════════════════════════════════════════════
 function CreditorDetail({
-  creditorId, session, profiles, onClose, onChanged,
-}: { creditorId: string; session: Session; profiles: Record<string, Profile>; onClose: () => void; onChanged: () => void }) {
+  creditorId, register, session, profiles, onClose, onChanged,
+}: { creditorId: string; register: RegStats | null; session: Session; profiles: Record<string, Profile>; onClose: () => void; onChanged: () => void }) {
   const [creditor, setCreditor] = useState<Creditor | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [form, setForm] = useState<Partial<Creditor>>({});
@@ -716,6 +761,24 @@ function CreditorDetail({
     setShowContactForm(true);
   }
 
+  // Ustawia kwotę wierzyciela na stan otwartych faktur z rejestru i zapisuje to w historii.
+  async function applyRegister() {
+    if (!creditor || !register) return;
+    const newAmount = Math.round(register.total);
+    if (!confirm(`Ustawić kwotę ${creditor.name} na ${fmtPLN(newAmount)} (stan rejestru faktur)? Poprzednia kwota: ${fmtPLN(Number(creditor.total_amount_pln))}. Zapis zostanie w historii.`)) return;
+    setSaving(true);
+    const { error } = await supabase.from("creditors").update({ total_amount_pln: newAmount, updated_at: new Date().toISOString() }).eq("id", creditorId);
+    if (!error) {
+      await supabase.from("creditor_events").insert({
+        creditor_id: creditorId, event_type: "note", event_date: todayStr(), created_by: session.user.id,
+        description: `Kwota zaktualizowana z rejestru faktur: ${fmtPLN(newAmount)} (${register.n} faktur, w tym po terminie ${fmtPLN(register.overdue)}); poprzednio ${fmtPLN(Number(creditor.total_amount_pln))}.`,
+      });
+    } else alert("Nie udało się zapisać: " + error.message);
+    setSaving(false);
+    await load();
+    onChanged();
+  }
+
   if (!creditor) return <div className="card text-sm text-slate-400">Ładowanie…</div>;
 
   return (
@@ -784,6 +847,39 @@ function CreditorDetail({
           {creditor.original_due_date && <div>Pierwotny termin: {creditor.original_due_date}</div>}
           {creditor.next_action_date && creditor.status !== "splacone" && <div>Kolejny kontakt: {creditor.next_action_date}</div>}
           {creditor.notes && <div className="text-slate-500 mt-1">{creditor.notes}</div>}
+        </div>
+      )}
+
+      {/* Faktury z rejestru kosztów */}
+      {register && register.n > 0 && (
+        <div>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Faktury z rejestru ({register.n})</h3>
+            <div className="text-xs text-slate-600">
+              otwarte {fmtPLN(register.total)}, po terminie <span className={register.overdue > 0 ? "text-red-600 font-medium" : ""}>{fmtPLN(register.overdue)}</span>
+              {register.maxDaysOverdue > 0 && ` (maks. ${register.maxDaysOverdue} dni)`}
+            </div>
+          </div>
+          <div className="text-[11px] text-slate-400 mb-1">Dopasowano po nazwie: {register.vendors.join("; ")}</div>
+          <div className="max-h-56 overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="text-slate-400"><tr><th className="text-left py-1">Numer</th><th className="text-left">Termin</th><th className="text-right">Kwota</th></tr></thead>
+              <tbody>
+                {[...register.items].sort((a, b) => (a.termin ?? "").localeCompare(b.termin ?? "")).map((i) => (
+                  <tr key={i.numer + i.termin} className="border-t border-slate-100">
+                    <td className="py-1 pr-2">{i.numer}</td>
+                    <td className={i.termin && i.termin < todayStr() ? "text-red-600" : ""}>{i.termin ? new Date(i.termin).toLocaleDateString("pl-PL") : "—"}</td>
+                    <td className="text-right tabular-nums">{fmtPLN(i.kwota)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {Math.round(register.total) !== Math.round(Number(creditor.total_amount_pln)) && (
+            <button className="btn-secondary mt-2 text-xs" disabled={saving} onClick={applyRegister}>
+              Ustaw kwotę z rejestru ({fmtPLN(Math.round(register.total))})
+            </button>
+          )}
         </div>
       )}
 
