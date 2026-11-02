@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, Fragment } from "react";
 import { supabase } from "@/lib/supabase";
 
 interface Vehicle {
@@ -22,6 +22,7 @@ interface Vehicle {
   service_contract: boolean | null;
   leasing_end_date: string | null;
   buyout_eur: number | null;
+  notes: string | null;
 }
 
 // Powód wyłączenia z eksploatacji — używane gdy is_active=false
@@ -45,6 +46,7 @@ const EMPTY_VEHICLE: VehicleDraft = {
   leasing_eur_mo: null, leasing_brutto_eur_mo: null, insurance_eur_mo: null,
   service_cost_km: null, avg_km_month: null, status_reason: null,
   service_contract: false, leasing_end_date: null, buyout_eur: null,
+  notes: null,
 };
 
 const fmt = (n: number | null) => n != null ? n.toLocaleString("pl-PL") : "—";
@@ -61,6 +63,12 @@ export default function FleetPage() {
   const [filterLeasing, setFilterLeasing] = useState("all");
   const [filterType, setFilterType] = useState("all");
   const [filterReason, setFilterReason] = useState<"all" | "uziemiony" | "wycofany">("all");
+  const [filterNotesOnly, setFilterNotesOnly] = useState(false);
+  const [expandedNotes, setExpandedNotes] = useState<Record<string, boolean>>({});
+
+  function toggleExpandNote(id: string) {
+    setExpandedNotes(prev => ({ ...prev, [id]: !prev[id] }));
+  }
 
   // Sort
   const [sortKey, setSortKey] = useState<SortKey>("reg");
@@ -78,10 +86,23 @@ export default function FleetPage() {
 
   async function loadVehicles() {
     // Load ALL vehicles — no is_active filter here, we filter in UI
-    const { data } = await supabase
+    const selectColsWithNotes = "id,reg,brand,model,vehicle_type,year_produced,odometer_km,avg_fuel_l100,leasing_eur_mo,leasing_brutto_eur_mo,insurance_eur_mo,service_cost_km,avg_km_month,is_active,status_reason,service_contract,leasing_end_date,buyout_eur,notes";
+    const selectColsLegacy = "id,reg,brand,model,vehicle_type,year_produced,odometer_km,avg_fuel_l100,leasing_eur_mo,leasing_brutto_eur_mo,insurance_eur_mo,service_cost_km,avg_km_month,is_active,status_reason,service_contract,leasing_end_date,buyout_eur";
+
+    let { data, error } = await supabase
       .from("vehicles")
-      .select("id,reg,brand,model,vehicle_type,year_produced,odometer_km,avg_fuel_l100,leasing_eur_mo,leasing_brutto_eur_mo,insurance_eur_mo,service_cost_km,avg_km_month,is_active,status_reason,service_contract,leasing_end_date,buyout_eur")
+      .select(selectColsWithNotes)
       .order("vehicle_type,reg");
+
+    if (error && error.code === "42703") {
+      // Kolumna notes dodawana jest w migracji 034_vehicle_notes.sql — zgodność wsteczna przed wdrożeniem migracji
+      const fallback = await supabase
+        .from("vehicles")
+        .select(selectColsLegacy)
+        .order("vehicle_type,reg");
+      data = (fallback.data ?? []).map(item => ({ ...item, notes: null })) as any;
+    }
+
     setVehicles(data ?? []);
     setLoading(false);
   }
@@ -98,11 +119,21 @@ export default function FleetPage() {
   async function saveVehicle(v: VehicleDraft) {
     setSaving(true);
     setSaveError(null);
+
+    // Walidacja długości uwag (limit 2000 znaków)
+    if (v.notes && v.notes.length > 2000) {
+      setSaving(false);
+      setSaveError("Uwagi i ustalenia nie mogą przekraczać 2000 znaków.");
+      return;
+    }
+
     // Netto puste, a brutto wypełnione → wylicz netto (brutto / 1.23),
     // bo cała aplikacja (kalkulator, budżet, koła) czyta leasing_eur_mo
     const netto = v.leasing_eur_mo == null && v.leasing_brutto_eur_mo != null
       ? Math.round(v.leasing_brutto_eur_mo / 1.23 * 100) / 100
       : v.leasing_eur_mo;
+    const trimmedNotes = v.notes?.trim() ? v.notes.trim() : null;
+
     const payload = {
       brand:                v.brand,
       model:                v.model,
@@ -119,18 +150,45 @@ export default function FleetPage() {
       leasing_end_date:     v.leasing_end_date,
       buyout_eur:           v.buyout_eur,
       status_reason:        v.status_reason,
+      notes:                trimmedNotes,
       // Wybranie powodu wyłączenia w formularzu od razu wyłącza pojazd z eksploatacji.
       ...(v.status_reason ? { is_active: false } : {}),
     };
 
     if (v.id) {
       const { error } = await supabase.from("vehicles").update(payload).eq("id", v.id);
-      if (error) { setSaving(false); setSaveError(error.message); return; }
+      if (error) {
+        if (error.code === "42703") {
+          const { notes: _n, ...payloadWithoutNotes } = payload;
+          const retry = await supabase.from("vehicles").update(payloadWithoutNotes).eq("id", v.id);
+          if (retry.error) { setSaving(false); setSaveError(retry.error.message); return; }
+          setSaving(false);
+          setEditVehicle(null);
+          setSaveError("Zapisano dane pojazdu, ale uwagi wymagają uruchomienia migracji 034_vehicle_notes.sql w Supabase.");
+          await loadVehicles();
+          return;
+        }
+        setSaving(false); setSaveError(error.message); return;
+      }
     } else {
       const reg = v.reg.trim().toUpperCase().replace(/\s+/g, "");
       if (!reg) { setSaving(false); setSaveError("Podaj numer rejestracyjny."); return; }
       const { error } = await supabase.from("vehicles").insert({ ...payload, reg });
       if (error) {
+        if (error.code === "42703") {
+          const { notes: _n, ...payloadWithoutNotes } = payload;
+          const retry = await supabase.from("vehicles").insert({ ...payloadWithoutNotes, reg });
+          if (retry.error) {
+            setSaving(false);
+            setSaveError(retry.error.code === "23505" ? `Pojazd o rejestracji "${reg}" już istnieje.` : retry.error.message);
+            return;
+          }
+          setSaving(false);
+          setEditVehicle(null);
+          setSaveError("Dodano pojazd, ale uwagi wymagają uruchomienia migracji 034_vehicle_notes.sql w Supabase.");
+          await loadVehicles();
+          return;
+        }
         setSaving(false);
         setSaveError(error.code === "23505" ? `Pojazd o rejestracji "${reg}" już istnieje.` : error.message);
         return;
@@ -200,9 +258,11 @@ export default function FleetPage() {
       list = list.filter(v =>
         v.reg.toLowerCase().includes(q) ||
         (v.brand ?? "").toLowerCase().includes(q) ||
-        (v.model ?? "").toLowerCase().includes(q)
+        (v.model ?? "").toLowerCase().includes(q) ||
+        (v.notes ?? "").toLowerCase().includes(q)
       );
     }
+    if (filterNotesOnly) list = list.filter(v => !!v.notes?.trim());
     if (filterType !== "all") list = list.filter(v => v.vehicle_type === filterType);
     if (filterBrand !== "all") list = list.filter(v => v.brand === filterBrand);
     if (filterYear !== "all") list = list.filter(v => v.year_produced?.toString() === filterYear);
@@ -224,7 +284,7 @@ export default function FleetPage() {
     });
 
     return list;
-  }, [vehicles, search, filterType, filterBrand, filterYear, filterOdo, filterLeasing, filterReason, filterActive, sortKey, sortDesc]);
+  }, [vehicles, search, filterNotesOnly, filterType, filterBrand, filterYear, filterOdo, filterLeasing, filterReason, filterActive, sortKey, sortDesc]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDesc(d => !d);
@@ -256,11 +316,11 @@ export default function FleetPage() {
   };
 
   const resetFilters = () => {
-    setSearch(""); setFilterType("all"); setFilterBrand("all"); setFilterYear("all");
+    setSearch(""); setFilterNotesOnly(false); setFilterType("all"); setFilterBrand("all"); setFilterYear("all");
     setFilterOdo("all"); setFilterLeasing("all"); setFilterReason("all");
     // Don't reset filterActive — user picks that intentionally
   };
-  const hasFilters = search || filterType !== "all" || filterBrand !== "all" || filterYear !== "all" || filterOdo !== "all" || filterLeasing !== "all" || filterReason !== "all";
+  const hasFilters = search || filterNotesOnly || filterType !== "all" || filterBrand !== "all" || filterYear !== "all" || filterOdo !== "all" || filterLeasing !== "all" || filterReason !== "all";
 
   // Stats (always on active vehicles for KPI bar)
   const activeVehicles = vehicles.filter(v => v.is_active);
@@ -368,7 +428,7 @@ export default function FleetPage() {
             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">Szukaj</label>
             <input
               type="text"
-              placeholder="Rejestracja, marka, model…"
+              placeholder="Rejestracja, marka, model, uwagi…"
               value={search}
               onChange={e => setSearch(e.target.value)}
               className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -439,6 +499,29 @@ export default function FleetPage() {
             </select>
           </div>
 
+          {/* Tylko z uwagami */}
+          <div>
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">Uwagi</label>
+            <button
+              type="button"
+              onClick={() => setFilterNotesOnly(v => !v)}
+              className={`px-3 py-2 border rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                filterNotesOnly
+                  ? "bg-amber-600 text-white border-amber-700 shadow-sm"
+                  : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+              }`}
+            >
+              <span>📝 Tylko z uwagami</span>
+              {vehicles.filter(v => !!v.notes?.trim()).length > 0 && (
+                <span className={`px-1.5 py-0.5 text-[11px] font-semibold rounded-full ${
+                  filterNotesOnly ? "bg-amber-800 text-white" : "bg-slate-100 text-slate-600"
+                }`}>
+                  {vehicles.filter(v => !!v.notes?.trim()).length}
+                </span>
+              )}
+            </button>
+          </div>
+
           {/* Reset */}
           {hasFilters && (
             <button onClick={resetFilters}
@@ -480,8 +563,11 @@ export default function FleetPage() {
               <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400 text-sm">Brak pojazdów spełniających kryteria</td></tr>
             ) : filtered.map((v, i) => {
               const rowBg = !v.is_active ? "bg-slate-50" : (odoColor(v.odometer_km) || "bg-white");
+              const hasNotes = !!v.notes?.trim();
+              const isExpanded = !!expandedNotes[v.id];
               return (
-              <tr key={v.id} className={`transition-colors group ${
+              <Fragment key={v.id}>
+              <tr className={`transition-colors group ${
                 !v.is_active
                   ? "opacity-50 bg-slate-50 hover:bg-slate-100"
                   : `hover:bg-slate-50 ${odoColor(v.odometer_km)}`
@@ -580,6 +666,46 @@ export default function FleetPage() {
                   </button>
                 </td>
               </tr>
+              {hasNotes && (
+                <tr className={`border-b border-slate-200/80 transition-colors ${
+                  !v.is_active ? "opacity-75 bg-slate-100/70 text-slate-500" : "bg-amber-50/40 text-slate-700 hover:bg-amber-50/70"
+                }`}>
+                  <td colSpan={11} className="px-4 py-1.5 text-xs">
+                    <div className="flex items-start justify-between gap-3">
+                      <div
+                        onClick={() => toggleExpandNote(v.id)}
+                        className="flex-1 cursor-pointer select-text flex items-baseline gap-1.5"
+                        title="Kliknij, aby rozwinąć lub zwinąć pełną treść"
+                      >
+                        <span className="font-semibold text-slate-600 shrink-0">📝 Uwagi:</span>
+                        <span className={isExpanded ? "whitespace-pre-wrap break-words text-slate-800" : "truncate block text-slate-700"}>
+                          {v.notes!.trim()}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0 ml-2">
+                        {v.notes!.trim().length > 80 && (
+                          <button
+                            type="button"
+                            onClick={() => toggleExpandNote(v.id)}
+                            className="text-[11px] text-blue-600 hover:text-blue-800 font-medium hover:underline"
+                          >
+                            {isExpanded ? "Zwiń" : "Rozwiń…"}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => { setSaveError(null); setEditVehicle({ ...v }); }}
+                          className="text-[11px] text-slate-500 hover:text-slate-800 hover:underline font-medium"
+                          title="Edytuj uwagę"
+                        >
+                          Edytuj
+                        </button>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              )}
+              </Fragment>
               );
             })}
           </tbody>
@@ -702,6 +828,24 @@ export default function FleetPage() {
                   </button>
                 </div>
               </label>
+
+              {/* Uwagi i ustalenia */}
+              <div className="col-span-2 border-t pt-3">
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-xs font-bold text-slate-700 uppercase tracking-wide">📝 Uwagi i ustalenia</p>
+                  <span className={`text-[11px] ${(editVehicle.notes?.length ?? 0) > 2000 ? "text-red-600 font-bold" : "text-slate-400"}`}>
+                    {editVehicle.notes?.length ?? 0} / 2000 znaków
+                  </span>
+                </div>
+                <textarea
+                  rows={4}
+                  maxLength={2000}
+                  value={editVehicle.notes ?? ""}
+                  onChange={e => setEditVehicle({ ...editVehicle, notes: e.target.value })}
+                  placeholder="Wpisz konieczne naprawy, ustalenia z kierowcą lub serwisem…"
+                  className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-y"
+                />
+              </div>
 
               <div className="col-span-2 border-t pt-3">
                 <p className="text-xs font-bold text-red-600 uppercase tracking-wide mb-2">🚫 Wyłączenie z eksploatacji</p>
