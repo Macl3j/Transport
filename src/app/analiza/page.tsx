@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
 import { calculateRoute, computeRouteDays, profitabilityLabel, euroClass as deriveEuroClass, FLEET } from "@/lib/calculator";
+import { parseMoneyEur, TMS_EXTRA_TOLL_HEADER } from "@/lib/tmsMoney";
 import { useSettings } from "@/lib/settings-context";
 
 interface OrsVerification {
@@ -41,6 +42,7 @@ interface RouteRow {
   totalCost: number;
   tollCost: number;       // EUR — myto (z TMS lub macierzy)
   tollFromTms: boolean;   // true = rzeczywiste myto z TMS, false = macierz
+  extraTollEur: number;   // EUR — promy i tunele ponad myto na trasie (TMS: "Zleceniodawca myto")
   label: string;
   labelColor: string;
   euroClass: number;      // 3 | 4 | 5 | 6 — derived from vehicle year
@@ -342,6 +344,8 @@ export default function AnalizaPage() {
             : tmsTollPlnRaw > 0
             ? Math.round((tmsTollPlnRaw / eurRate) * 100) / 100
             : 0;
+          // Promy i tunele ponad myto na trasie — nasz dodatkowy koszt zlecenia
+          const extraTollEur = parseMoneyEur(get(row, TMS_EXTRA_TOLL_HEADER), eurRate);
 
           // Estimate fracht when TMS has no invoice yet (fracht=0)
           let frachtEstimated = false;
@@ -355,6 +359,7 @@ export default function AnalizaPage() {
               trailerLeasingEurMo,
               insuranceEurMo, serviceCostKmOverride, serviceContract, routeDays,
               overrideTollEur: tmsTollEur || undefined,
+              extraTollEur,
               perDobeShareFactor,
             }, settings);
             frachtEur = Math.round((breakdown0.total + tmsMarzaPerKm * distanceKm) * 100) / 100;
@@ -373,6 +378,7 @@ export default function AnalizaPage() {
             trailerLeasingEurMo,
             insuranceEurMo, serviceCostKmOverride, serviceContract, routeDays,
             overrideTollEur: tmsTollEur || undefined,
+            extraTollEur,
             perDobeShareFactor,
           }, settings);
 
@@ -397,6 +403,7 @@ export default function AnalizaPage() {
             totalCost: breakdown.total,
             tollCost: breakdown.toll,
             tollFromTms: tmsTollEur > 0,
+            extraTollEur: breakdown.extraToll,
             label, labelColor: color,
             euroClass: vehicleYear ? deriveEuroClass(vehicleYear) : 6,
             isContinuation, perDobeShareFactor, tripDate,
@@ -849,6 +856,12 @@ export default function AnalizaPage() {
                       <div className={`text-xs font-medium ${r.tollFromTms ? "text-emerald-600" : "text-slate-400"}`}>
                         {r.tollFromTms ? "✓ TMS" : `≈ macierz`}
                       </div>
+                      {r.extraTollEur > 0 && (
+                        <div className="text-xs font-medium text-purple-600"
+                          title="Promy i tunele ponad myto na trasie (TMS: Zleceniodawca myto) — wliczone w koszt całkowity">
+                          + {r.extraTollEur.toLocaleString("pl-PL", { maximumFractionDigits: 0 })} promy/tunele
+                        </div>
+                      )}
                     </td>
                     <td className="px-3 py-2.5 text-right text-slate-600">
                       {r.totalCost.toLocaleString("pl-PL", { maximumFractionDigits: 0 })}

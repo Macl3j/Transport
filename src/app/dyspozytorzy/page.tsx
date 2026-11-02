@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
 import { calculateRoute, computeRouteDays, idleGapCostEur, FLEET } from "@/lib/calculator";
+import { parseMoneyEur, TMS_EXTRA_TOLL_HEADER } from "@/lib/tmsMoney";
 import { useSettings } from "@/lib/settings-context";
 
 // ─── Types ────────────────────────────────────────────────────
@@ -35,7 +36,7 @@ interface CostBreakdownDetail {
   fuel: number; adblue: number; idle: number;
   toll: number; driver: number; service: number;
   leasing: number; trailerLeasing: number; insurance: number;
-  idleFleet?: number; financing?: number;
+  idleFleet?: number; financing?: number; extraToll?: number;
 }
 
 // ─── Monthly analysis types ───────────────────────────────────
@@ -482,6 +483,8 @@ export default function DyspozytorzyPage() {
       const tmsTollEur = tmsTollEurRaw > 0
         ? tmsTollEurRaw
         : tmsTollPlnRaw > 0 ? Math.round((tmsTollPlnRaw / eurRate) * 100) / 100 : 0;
+      // Promy i tunele ponad myto na trasie — nasz dodatkowy koszt zlecenia
+      const extraTollEur = parseMoneyEur(get(row, TMS_EXTRA_TOLL_HEADER), eurRate);
 
       // TMS own margin/km — used to estimate fracht when invoice missing
       const tmsMarzaPerKmRaw = parseFloat(get(row, "marża eur na 1 km", "marża eur") || "0");
@@ -535,6 +538,7 @@ export default function DyspozytorzyPage() {
         serviceContract: vData?.service_contract ?? false,
         routeDays,
         overrideTollEur: tmsTollEur || undefined,
+        extraTollEur,
         perDobeShareFactor,
       };
 
@@ -572,7 +576,7 @@ export default function DyspozytorzyPage() {
           fuel: bd.fuel, adblue: bd.adblue, idle: bd.idle,
           toll: bd.toll, driver: bd.driver, service: bd.service,
           leasing: bd.leasing, trailerLeasing: bd.trailerLeasing, insurance: bd.insurance,
-          idleFleet: bd.idleFleet, financing: bd.financing,
+          idleFleet: bd.idleFleet, financing: bd.financing, extraToll: bd.extraToll,
         },
         costPerKm: bd.costPerKm,
         revenuePerKm: bd.revenuePerKm,
@@ -2078,6 +2082,7 @@ export default function DyspozytorzyPage() {
           { key: "Paliwo",      val: bd.fuel,      icon: "⛽", color: "bg-orange-500" },
           { key: "Kierowca",    val: bd.driver,    icon: "👤", color: "bg-blue-500" },
           { key: "Myto",        val: bd.toll,      icon: "🛣️", color: "bg-purple-500" },
+          { key: "Promy i tunele", val: bd.extraToll ?? 0, icon: "⛴️", color: "bg-purple-400" },
           { key: "Leasing cią.", val: bd.leasing,         icon: "💳", color: "bg-teal-500" },
           { key: "Leasing nacz.", val: bd.trailerLeasing, icon: "🚛", color: "bg-teal-400" },
           { key: "Ubezp.",        val: bd.insurance,     icon: "🛡️", color: "bg-indigo-500" },
@@ -2086,7 +2091,7 @@ export default function DyspozytorzyPage() {
           { key: "Postój",      val: bd.idle,      icon: "⏸️", color: "bg-yellow-500" },
           { key: "Pojazdy nie jeżdżące", val: bd.idleFleet ?? 0, icon: "🅿️", color: "bg-rose-400" },
           { key: "Finansowanie", val: bd.financing ?? 0, icon: "🏦", color: "bg-fuchsia-500" },
-        ].filter(c => c.val > 0 || (c.key !== "Pojazdy nie jeżdżące" && c.key !== "Finansowanie")).sort((a,b) => b.val - a.val);
+        ].filter(c => c.val > 0 || (c.key !== "Pojazdy nie jeżdżące" && c.key !== "Finansowanie" && c.key !== "Promy i tunele")).sort((a,b) => b.val - a.val);
 
         // Find biggest culprit
         const biggest = costs[0];

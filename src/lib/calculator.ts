@@ -15,6 +15,7 @@ export interface RouteInput {
   freightEur: number;
   transitCountries?: string[];     // incl. origin & dest for toll calc
   overrideTollEur?: number;        // from ORS real-route calculation (replaces matrix)
+  extraTollEur?: number;           // dodatkowe opłaty ponad myto na trasie (promy, tunele) — doliczane do kosztów
   leasingEurMo?: number;           // vehicle-specific netto EUR/mo (tractor)
   trailerLeasingEurMo?: number;    // naczepa leasing EUR/mo (from fleet pairing or avg)
   insuranceEurMo?: number;         // OC+AC EUR/mo per vehicle (from Supabase)
@@ -35,6 +36,7 @@ export interface CostBreakdown {
   fuel: number;
   adblue: number;
   toll: number;
+  extraToll: number;      // promy i tunele ponad myto na trasie
   insurance: number;
   driver: number;
   leasing: number;        // tractor leasing
@@ -278,8 +280,11 @@ export function calculateRoute(input: RouteInput, settings?: CalcSettings): Cost
   const idleFleetCost = ((s.idleFleetCostPlnMo ?? 0) / eurRate) * overheadDayFactor;
   const financingCost = ((s.financingCostPlnMo ?? 0) / eurRate) * overheadDayFactor;
 
+  // 10. PROMY I TUNELE — kwota z TMS ("Zleceniodawca myto") jest doliczana ponad myto na trasie
+  const extraTollCost = input.extraTollEur != null && input.extraTollEur > 0 ? input.extraTollEur : 0;
+
   // ─── Totals ───────────────────────────────────────────────
-  const total = fuelCost + adblue + idle + tollCost + driverCost + serviceCost + leasingCost + trailerLeasingCost + insuranceCost + idleFleetCost + financingCost;
+  const total = fuelCost + adblue + idle + tollCost + extraTollCost + driverCost + serviceCost + leasingCost + trailerLeasingCost + insuranceCost + idleFleetCost + financingCost;
 
   const marginEur = freightEur - total;
   const marginPct = freightEur > 0 ? (marginEur / freightEur) * 100 : 0;
@@ -295,6 +300,7 @@ export function calculateRoute(input: RouteInput, settings?: CalcSettings): Cost
     adblue:  round2(adblue),
     idle:    round2(idle),
     toll:    round2(tollCost),
+    extraToll: round2(extraTollCost),
     driver:  round2(driverCost),
     service:        round2(serviceCost),
     leasing:        round2(leasingCost),

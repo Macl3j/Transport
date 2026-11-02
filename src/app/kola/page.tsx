@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
 import { calculateRoute, computeRouteDays, FLEET } from "@/lib/calculator";
+import { parseMoneyEur, TMS_EXTRA_TOLL_HEADER } from "@/lib/tmsMoney";
 import { useSettings } from "@/lib/settings-context";
 import {
   analyzeCycles,
@@ -257,6 +258,8 @@ function parseTmsForCycles(
     const tmsTollEur = tmsTollEurRaw > 0
       ? tmsTollEurRaw
       : tmsTollPlnRaw > 0 ? Math.round((tmsTollPlnRaw / eurRate) * 100) / 100 : 0;
+    // Promy i tunele ponad myto na trasie — nasz dodatkowy koszt zlecenia
+    const extraTollEur = parseMoneyEur(get(row, TMS_EXTRA_TOLL_HEADER), eurRate);
 
     // Margin hint from TMS (for fracht estimation)
     const tmsMarzaPerKm = parseFloat(get(row, "marża eur na 1 km", "marża eur") || "0") || 0;
@@ -278,6 +281,7 @@ function parseTmsForCycles(
       serviceCostKmOverride: vData?.service_cost_km  ?? undefined,
       routeDays,
       overrideTollEur: tmsTollEur || undefined,
+      extraTollEur,
     };
 
     // Estimate fracht when missing

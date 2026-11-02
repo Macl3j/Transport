@@ -52,6 +52,7 @@ export default function CostBreakdown({
     { name: "AdBlue",         value: result.adblue,         icon: "💧" },
     { name: "Bieg jałowy",    value: result.idle,           icon: "🔄" },
     { name: "Autostrady",     value: result.toll,           icon: "🛣️" },
+    { name: "Promy i tunele", value: result.extraToll,      icon: "⛴️" },
     { name: "Kierowca",       value: result.driver,         icon: "👤" },
     { name: "Serwis",         value: result.service,        icon: "🔧" },
     { name: "Leasing cią.",   value: result.leasing,        icon: "💳" },
@@ -59,7 +60,7 @@ export default function CostBreakdown({
     { name: "Ubezpieczenie",  value: result.insurance,      icon: "🛡️" },
     { name: "Pojazdy nie jeżdżące", value: result.idleFleet, icon: "🅿️" },
     { name: "Finansowanie floty",   value: result.financing, icon: "🏦" },
-  ].filter(i => i.value > 0 || !["Pojazdy nie jeżdżące", "Finansowanie floty"].includes(i.name));
+  ].filter(i => i.value > 0 || !["Pojazdy nie jeżdżące", "Finansowanie floty", "Promy i tunele"].includes(i.name));
 
   const pieData = costItems.map(i => ({ name: i.name, value: i.value }));
 
