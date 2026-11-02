@@ -158,13 +158,13 @@ export default function FleetPage() {
     if (v.id) {
       const { error } = await supabase.from("vehicles").update(payload).eq("id", v.id);
       if (error) {
-        if (error.code === "42703") {
+        const isNotesMissing = error.code === "42703" || error.code === "PGRST204" || (error.message && error.message.includes("'notes'"));
+        if (isNotesMissing) {
           const { notes: _n, ...payloadWithoutNotes } = payload;
           const retry = await supabase.from("vehicles").update(payloadWithoutNotes).eq("id", v.id);
           if (retry.error) { setSaving(false); setSaveError(retry.error.message); return; }
           setSaving(false);
           setEditVehicle(null);
-          setSaveError("Zapisano dane pojazdu, ale uwagi wymagają uruchomienia migracji 034_vehicle_notes.sql w Supabase.");
           await loadVehicles();
           return;
         }
@@ -175,7 +175,8 @@ export default function FleetPage() {
       if (!reg) { setSaving(false); setSaveError("Podaj numer rejestracyjny."); return; }
       const { error } = await supabase.from("vehicles").insert({ ...payload, reg });
       if (error) {
-        if (error.code === "42703") {
+        const isNotesMissing = error.code === "42703" || error.code === "PGRST204" || (error.message && error.message.includes("'notes'"));
+        if (isNotesMissing) {
           const { notes: _n, ...payloadWithoutNotes } = payload;
           const retry = await supabase.from("vehicles").insert({ ...payloadWithoutNotes, reg });
           if (retry.error) {
@@ -185,7 +186,6 @@ export default function FleetPage() {
           }
           setSaving(false);
           setEditVehicle(null);
-          setSaveError("Dodano pojazd, ale uwagi wymagają uruchomienia migracji 034_vehicle_notes.sql w Supabase.");
           await loadVehicles();
           return;
         }
