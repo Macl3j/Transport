@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "skills": {
+    "omni-admin": {
+      "source": "exploreomni/omni-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/omni-admin/SKILL.md",
+      "computedHash": "7f1561b53662a200195f77136b22d003fea28ddf1c10f8ed58eae70c6780fc00"
+    },
+    "omni-ai-eval": {
+      "source": "exploreomni/omni-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/omni-ai-eval/SKILL.md",
+      "computedHash": "230241857de542b9192fceb81ea5111df750c7c87b33b1f7ba77094855573506"
+    },
+    "omni-ai-optimizer": {
+      "source": "exploreomni/omni-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/omni-ai-optimizer/SKILL.md",
+      "computedHash": "9806035c2dbbaff7f0161802c8ae77f47927ec70eacfc7287d217acc26b28326"
+    },
+    "omni-content-builder": {
+      "source": "exploreomni/omni-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/omni-content-builder/SKILL.md",
+      "computedHash": "9a2d541088da4408d283380e03027bc0aebdf0e18ab0b2b5300377650b6ed118"
+    },
+    "omni-content-explorer": {
+      "source": "exploreomni/omni-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/omni-content-explorer/SKILL.md",
+      "computedHash": "7d1b3fb7d43a17d07ecdbb74a5d7260940d871b7b97ae1c61ef40d7baa4e9a19"
+    },
+    "omni-embed": {
+      "source": "exploreomni/omni-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/omni-embed/SKILL.md",
+      "computedHash": "3e0ad09f3dca3f1757d9b14a3b4564054fdb786fea0c9b56e2f9d251225ef4c5"
+    },
+    "omni-model-builder": {
+      "source": "exploreomni/omni-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/omni-model-builder/SKILL.md",
+      "computedHash": "318b3a595b28a81706f0d78709906d2427f12ef908ae26c94f2c6eada5812693"
+    },
+    "omni-model-explorer": {
+      "source": "exploreomni/omni-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/omni-model-explorer/SKILL.md",
+      "computedHash": "e5edd9ad600e98368cfe203381aa9a62914e290b4ea9a552ec86bd221b616d80"
+    },
+    "omni-query": {
+      "source": "exploreomni/omni-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/omni-query/SKILL.md",
+      "computedHash": "a580336aac2b8a935fe1786da6f01ebf6527d57258096ecfd4d61b0711f7bc3f"
+    },
+    "omni-to-databricks-metric-view": {
+      "source": "exploreomni/omni-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/omni-integrations/skills/omni-to-databricks-metric-views/SKILL.md",
+      "computedHash": "56b12a0602ed9d05974346f1ad9efe82615d0383ede3c5f5fa7196bd2b335bfa"
+    },
+    "omni-to-snowflake-semantic-view": {
+      "source": "exploreomni/omni-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/omni-integrations/skills/omni-to-snowflake-semantic-view/SKILL.md",
+      "computedHash": "65c25e1f7fbddeac14413ad8285c36a6732669820a019fdae6eba0beaaeca912"
+    }
+  }
+}
