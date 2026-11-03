@@ -6,3 +6,5 @@ node_modules/
 *.xlsx
 dist/
 .supabase/
+.git_backup/
+*.tsbuildinfo

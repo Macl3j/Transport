@@ -17,6 +17,7 @@ interface Dispatcher {
 }
 
 interface Vehicle {
+  id?: string;
   reg: string;
   brand: string | null;
   model: string | null;
@@ -246,6 +247,7 @@ export default function DyspozytorzyPage() {
   const [monthlyData, setMonthlyData] = useState<MonthlyVehicleSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
   const [activeTab, setActiveTab] = useState<"config" | "dashboard" | "routes" | "clients" | "monthly" | "idle">("dashboard");
   const [selectedDispatcher, setSelectedDispatcher] = useState<string | null>(null);
   const [showUnassigned, setShowUnassigned] = useState(false);
@@ -308,16 +310,27 @@ export default function DyspozytorzyPage() {
 
   async function loadData() {
     setLoading(true);
-    const [{ data: disps }, { data: vehs }] = await Promise.all([
-      supabase.from("dispatchers").select("*").eq("is_active", true).order("name"),
-      // Uwaga: BEZ filtra is_active=true — wyłączenie pojazdu z eksploatacji nie może
-      // wymazywać jego przypisania do dyspozytora, bo historyczne trasy tego pojazdu
-      // musimy dalej móc analizować per dyspozytor (patrz dispMap niżej).
-      supabase.from("vehicles").select("reg,brand,model,vehicle_type,dispatcher_id,avg_fuel_l100,year_produced,leasing_eur_mo,insurance_eur_mo,service_cost_km,service_contract,avg_km_month,is_active").order("vehicle_type,reg"),
-    ]);
-    setDispatchers(disps ?? []);
-    setVehicles(vehs ?? []);
-    setLoading(false);
+    setFetchError(false);
+    try {
+      const [{ data: disps, error: errD }, { data: vehs, error: errV }] = await Promise.all([
+        supabase.from("dispatchers").select("*").eq("is_active", true).order("name"),
+        // Uwaga: BEZ filtra is_active=true — wyłączenie pojazdu z eksploatacji nie może
+        // wymazywać jego przypisania do dyspozytora, bo historyczne trasy tego pojazdu
+        // musimy dalej móc analizować per dyspozytor (patrz dispMap niżej).
+        supabase.from("vehicles").select("id,reg,brand,model,vehicle_type,dispatcher_id,avg_fuel_l100,year_produced,leasing_eur_mo,insurance_eur_mo,service_cost_km,service_contract,avg_km_month,is_active").order("vehicle_type,reg"),
+      ]);
+      if (errD || errV) {
+        console.error("Błąd pobierania dyspozytorów lub pojazdów:", JSON.stringify(errD || errV, null, 2));
+        setFetchError(true);
+      }
+      setDispatchers(disps ?? []);
+      setVehicles(vehs ?? []);
+    } catch (err) {
+      console.error("Wyjątek podczas loadData:", JSON.stringify(err, null, 2));
+      setFetchError(true);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function addDispatcher() {
@@ -1039,6 +1052,58 @@ export default function DyspozytorzyPage() {
                   const idle = idleForDispatcher(d.id, vehicleTypeFilter);
                   const realMargin = filtMargin - (idle?.cost ?? 0);
                   const realPct = filtFracht > 0 ? (realMargin/filtFracht)*100 : 0;
+
+                  // Ciągniki przypisane i z trasami (unikalne po ID/rejestracji)
+                  const assignedTractorsMap = new Map<string, Vehicle>();
+                  for (const v of vehicles) {
+                    if (v.is_active && v.vehicle_type === "ciągnik" && v.dispatcher_id === d.id) {
+                      const key = v.id || normalizePlate(v.reg);
+                      if (!assignedTractorsMap.has(key)) {
+                        assignedTractorsMap.set(key, v);
+                      }
+                    }
+                  }
+                  const assignedTractors = Array.from(assignedTractorsMap.values());
+                  const Y = assignedTractors.length;
+
+                  const routesPlateSet = new Set<string>();
+                  for (const r of d.routeList) {
+                    if (r.vehicle) routesPlateSet.add(normalizePlate(r.vehicle));
+                  }
+                  if (d.shortRouteList) {
+                    for (const r of d.shortRouteList) {
+                      if (r.vehicle) routesPlateSet.add(normalizePlate(r.vehicle));
+                    }
+                  }
+
+                  const tractorsWithRoutes: Vehicle[] = [];
+                  const missingTractors: Vehicle[] = [];
+                  for (const t of assignedTractors) {
+                    if (routesPlateSet.has(normalizePlate(t.reg))) {
+                      tractorsWithRoutes.push(t);
+                    } else {
+                      missingTractors.push(t);
+                    }
+                  }
+
+                  const X = tractorsWithRoutes.length;
+                  const missingPlates = missingTractors
+                    .map(t => t.reg)
+                    .sort((a, b) => a.localeCompare(b, "pl", { sensitivity: "base" }));
+
+                  const isDeficit = !loading && !analysisLoading && !fetchError && X < Y;
+
+                  let tooltipText = "";
+                  if (loading || analysisLoading) {
+                    tooltipText = "Ładowanie danych...";
+                  } else if (fetchError) {
+                    tooltipText = "Błąd pobierania danych floty";
+                  } else if (missingPlates.length === 0) {
+                    tooltipText = "Wszystkie przypisane ciągniki mają trasy w wybranym okresie";
+                  } else {
+                    tooltipText = `Z trasami: ${X} z ${Y} przypisanych ciągników.\nBez tras w wybranym okresie: ${missingPlates.join(", ")}`;
+                  }
+
                   return (
                   <div key={d.id}
                     onClick={()=>setSelectedDispatcher(selectedDispatcher===d.id?null:d.id)}
@@ -1047,18 +1112,30 @@ export default function DyspozytorzyPage() {
                       <div>
                         <h3 className="font-bold text-slate-800">{d.name}</h3>
                         {/* CIĄ / NAC badges */}
-                        <div className="flex gap-1 mt-1 flex-wrap">
-                          {d.ciagniki.length > 0 && (
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${vehicleTypeFilter==="ciągnik"?"bg-blue-600 text-white":"bg-blue-100 text-blue-700"}`}>
-                              🚛 {d.ciagniki.length} CIĄ
+                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                          {Y > 0 && (
+                            <span
+                              tabIndex={0}
+                              title={tooltipText}
+                              aria-label={tooltipText}
+                              className={`relative group cursor-help text-[10px] px-1.5 py-0.5 rounded font-bold whitespace-nowrap outline-none focus:ring-1 focus:ring-blue-400 transition-colors ${
+                                vehicleTypeFilter === "ciągnik"
+                                  ? `bg-blue-600 ${isDeficit ? "text-orange-300" : "text-white"}`
+                                  : `bg-blue-100 ${isDeficit ? "text-orange-600" : "text-blue-700"}`
+                              }`}
+                            >
+                              🚛 {X} / {Y} CIA
+                              <span className="pointer-events-none absolute bottom-full left-0 mb-1.5 hidden group-hover:block group-focus:block z-50 whitespace-pre rounded-md bg-slate-900/95 px-2.5 py-1.5 text-[11px] font-normal leading-relaxed text-white shadow-xl min-w-[220px] max-w-[320px] text-left border border-slate-700/50">
+                                {tooltipText}
+                              </span>
                             </span>
                           )}
                           {d.naczepy.length > 0 && (
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${vehicleTypeFilter==="naczepa"?"bg-slate-600 text-white":"bg-slate-100 text-slate-600"}`}>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold whitespace-nowrap ${vehicleTypeFilter==="naczepa"?"bg-slate-600 text-white":"bg-slate-100 text-slate-600"}`}>
                               🚌 {d.naczepy.length} NAC
                             </span>
                           )}
-                          <span className="text-[10px] text-slate-400">{filteredRoutes.length} tras · {Math.round(filteredRoutes.reduce((s,r)=>s+r.totalKm,0)).toLocaleString("pl-PL")} km</span>
+                          <span className="text-[10px] text-slate-400 whitespace-nowrap">{filteredRoutes.length} tras · {Math.round(filteredRoutes.reduce((s,r)=>s+r.totalKm,0)).toLocaleString("pl-PL")} km</span>
                         </div>
                       </div>
                       <div className="text-right">

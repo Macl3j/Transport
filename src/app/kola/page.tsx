@@ -27,6 +27,7 @@ interface Dispatcher {
 }
 
 interface Vehicle {
+  id?: string;
   reg: string;
   brand?: string | null;
   model?: string | null;
@@ -647,7 +648,7 @@ export default function KolaPage() {
     Promise.all([
       supabase
         .from("vehicles")
-        .select("reg,brand,model,vehicle_type,dispatcher_id,avg_fuel_l100,year_produced,leasing_eur_mo,insurance_eur_mo,service_cost_km,is_active")
+        .select("id,reg,brand,model,vehicle_type,dispatcher_id,avg_fuel_l100,year_produced,leasing_eur_mo,insurance_eur_mo,service_cost_km,is_active")
         .eq("is_active", true)
         .order("reg"),
       supabase
@@ -1008,6 +1009,50 @@ export default function KolaPage() {
                   const hasLosses = d.losses > 0;
                   const activeCyclesInFile = d.cycles.length;
 
+                  // Ciągniki przypisane i z trasami (unikalne po ID/rejestracji)
+                  const assignedTractorsMap = new Map<string, Vehicle>();
+                  for (const v of vehicles) {
+                    if (v.is_active && v.vehicle_type === "ciągnik" && v.dispatcher_id === d.id) {
+                      const key = v.id || normalizePlate(v.reg);
+                      if (!assignedTractorsMap.has(key)) {
+                        assignedTractorsMap.set(key, v);
+                      }
+                    }
+                  }
+                  const assignedTractors = Array.from(assignedTractorsMap.values());
+                  const Y = assignedTractors.length;
+
+                  const routesPlateSet = new Set<string>();
+                  for (const c of d.cycles) {
+                    if (c.vehicleReg) routesPlateSet.add(normalizePlate(c.vehicleReg));
+                  }
+
+                  const tractorsWithRoutes: Vehicle[] = [];
+                  const missingTractors: Vehicle[] = [];
+                  for (const t of assignedTractors) {
+                    if (routesPlateSet.has(normalizePlate(t.reg))) {
+                      tractorsWithRoutes.push(t);
+                    } else {
+                      missingTractors.push(t);
+                    }
+                  }
+
+                  const X = tractorsWithRoutes.length;
+                  const missingPlates = missingTractors
+                    .map(t => t.reg)
+                    .sort((a, b) => a.localeCompare(b, "pl", { sensitivity: "base" }));
+
+                  const isDeficit = !loading && !parsing && X < Y;
+
+                  let tooltipText = "";
+                  if (loading || parsing) {
+                    tooltipText = "Ładowanie danych...";
+                  } else if (missingPlates.length === 0) {
+                    tooltipText = "Wszystkie przypisane ciągniki mają trasy w wybranym okresie";
+                  } else {
+                    tooltipText = `Z trasami: ${X} z ${Y} przypisanych ciągników.\nBez tras w wybranym okresie: ${missingPlates.join(", ")}`;
+                  }
+
                   return (
                     <div
                       key={d.id}
@@ -1040,14 +1085,24 @@ export default function KolaPage() {
                           </div>
 
                           {/* CIĄ / NAC badges */}
-                          <div className="flex gap-1 mt-1 flex-wrap items-center">
-                            {d.ciagniki.length > 0 && (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-blue-100 text-blue-700">
-                                🚛 {d.ciagniki.length} CIĄ
+                          <div className="flex gap-1.5 mt-1 flex-wrap items-center">
+                            {Y > 0 && (
+                              <span
+                                tabIndex={0}
+                                title={tooltipText}
+                                aria-label={tooltipText}
+                                className={`relative group cursor-help text-[10px] px-1.5 py-0.5 rounded font-bold whitespace-nowrap outline-none focus:ring-1 focus:ring-blue-400 transition-colors bg-blue-100 ${
+                                  isDeficit ? "text-orange-600" : "text-blue-700"
+                                }`}
+                              >
+                                🚛 {X} / {Y} CIA
+                                <span className="pointer-events-none absolute bottom-full left-0 mb-1.5 hidden group-hover:block group-focus:block z-50 whitespace-pre rounded-md bg-slate-900/95 px-2.5 py-1.5 text-[11px] font-normal leading-relaxed text-white shadow-xl min-w-[220px] max-w-[320px] text-left border border-slate-700/50">
+                                  {tooltipText}
+                                </span>
                               </span>
                             )}
                             {d.naczepy.length > 0 && (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-slate-100 text-slate-600">
+                              <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-slate-100 text-slate-600 whitespace-nowrap">
                                 🚌 {d.naczepy.length} NAC
                               </span>
                             )}
