@@ -7,7 +7,8 @@
 // (potrącenie z plusem, 38 dni w 30-dniowym miesiącu, kwoty bez opisu).
 // ============================================================
 
-import * as XLSX from "xlsx";
+// xlsx-js-style = to samo SheetJS + zapis stylów (zwykłe "xlsx" ignoruje kolory, ramki i formaty).
+import * as XLSX from "xlsx-js-style";
 
 export type PayrollRole = "editor" | "approver";
 export type PeriodStatus = "otwarty" | "zgloszony" | "zatwierdzony" | "wyslany";
@@ -261,6 +262,41 @@ function safeSheetName(base: string, used: Set<string>): string {
 const S = (v: string): XLSX.CellObject => ({ t: "s", v });
 const N = (v: number, f?: string): XLSX.CellObject => (f ? { t: "n", v, f } : { t: "n", v });
 
+// ── Style eksportu (czytelność; układ komórek zostaje bez zmian, bo importer czyta stałe adresy) ──
+const NAVY = "1F3A5F", LIGHT = "EAF0F7", BAND = "F5F6F8", LINE = "C9D1DC", HILITE = "DCE8F5";
+const side = { style: "thin" as const, color: { rgb: LINE } };
+const BORDER = { top: side, bottom: side, left: side, right: side };
+const solid = (rgb: string) => ({ patternType: "solid" as const, fgColor: { rgb } });
+const MONEY = '#,##0.00;[Red]-#,##0.00';
+const PLN = '#,##0.00" zł";[Red]-#,##0.00" zł"';
+const ST = {
+  title: { font: { name: "Calibri", bold: true, sz: 16, color: { rgb: NAVY } }, alignment: { vertical: "center" as const } },
+  period: { font: { name: "Calibri", bold: true, sz: 12, color: { rgb: NAVY } }, alignment: { horizontal: "right" as const, vertical: "center" as const } },
+  label: { font: { name: "Calibri", bold: true, sz: 10, color: { rgb: NAVY } }, fill: solid(LIGHT), border: BORDER, alignment: { vertical: "center" as const, wrapText: true } },
+  head: { font: { name: "Calibri", bold: true, sz: 10, color: { rgb: "FFFFFF" } }, fill: solid(NAVY), border: BORDER, alignment: { horizontal: "center" as const, vertical: "center" as const, wrapText: true } },
+  text: { font: { name: "Calibri", sz: 10 }, border: BORDER, alignment: { vertical: "center" as const, wrapText: true } },
+  textB: { font: { name: "Calibri", sz: 11, bold: true }, border: BORDER, alignment: { vertical: "center" as const } },
+  note: { font: { name: "Calibri", sz: 9, italic: true, color: { rgb: "6B7480" } }, alignment: { vertical: "center" as const } },
+  int: { font: { name: "Calibri", sz: 11, bold: true }, border: BORDER, numFmt: "0", alignment: { horizontal: "center" as const, vertical: "center" as const } },
+  money: { font: { name: "Calibri", sz: 10 }, border: BORDER, numFmt: MONEY, alignment: { horizontal: "right" as const, vertical: "center" as const } },
+  moneyB: { font: { name: "Calibri", sz: 11, bold: true }, border: BORDER, numFmt: PLN, alignment: { horizontal: "right" as const, vertical: "center" as const } },
+  total: { font: { name: "Calibri", sz: 13, bold: true, color: { rgb: "FFFFFF" } }, fill: solid(NAVY), border: BORDER, numFmt: PLN, alignment: { horizontal: "right" as const, vertical: "center" as const } },
+  totalLabel: { font: { name: "Calibri", sz: 11, bold: true, color: { rgb: NAVY } }, fill: solid(LIGHT), border: BORDER, alignment: { horizontal: "right" as const, vertical: "center" as const } },
+};
+type Sty = (typeof ST)[keyof typeof ST];
+/** Nakłada styl na cały zakres (tworzy puste komórki, żeby ramki i tło były ciągłe w scalonych polach). */
+function paint(ws: XLSX.WorkSheet, range: string, style: Sty | Record<string, unknown>, merge = false) {
+  const r = XLSX.utils.decode_range(range);
+  for (let R = r.s.r; R <= r.e.r; R++) for (let C = r.s.c; C <= r.e.c; C++) {
+    const a = XLSX.utils.encode_cell({ r: R, c: C });
+    if (!ws[a]) ws[a] = { t: "s", v: "" };
+    ws[a].s = style;
+  }
+  if (merge && (r.e.r > r.s.r || r.e.c > r.s.c)) (ws["!merges"] = ws["!merges"] ?? []).push(r);
+}
+const setH = (ws: XLSX.WorkSheet, row: number, hpt: number) => { const rows = (ws["!rows"] = ws["!rows"] ?? []); rows[row - 1] = { hpt }; };
+const wrapH = (text: string, perLine: number, min = 20) => Math.max(min, Math.ceil(Math.max(text.length, 1) / perLine) * 14 + 6);
+
 export interface ExportInput {
   period: Period; people: Person[]; lines: Line[]; entries: Entry[];
   rateOf: (personId: string) => { day_rate: number; leave_rate: number } | null;
@@ -297,7 +333,8 @@ export function buildOzarWorkbook(inp: ExportInput): XLSX.WorkBook {
     ws["K8"] = S("KWOTA"); ws["L8"] = S(credits.map(entryText).join("; "));
     ws["J9"] = S("UZNANIA/ ZWROTY"); ws["K9"] = N(calc.credits, credits.length ? `SUM(K18:K${17 + credits.length})` : undefined);
     if (!credits.length) ws["K9"] = N(0);
-    ws["S9"] = S("ILOŚĆ "); ws["T9"] = S("KWOTA");
+    ws["T6"] = S("ILOŚĆ DNI"); ws["U6"] = S("KWOTA");
+    ws["R9"] = S("ILOŚĆ DNI"); ws["S9"] = S("KWOTA");
     ws["P10"] = S("ILOŚĆ DNI NA URLOPIE WYPOCZYNKOWYM "); ws["R10"] = N(line.days_leave); ws["S10"] = N(calc.leaveAmount ?? 0, "S5*R10");
     if (line.days_sick > 0) { ws["P11"] = S("ILOŚĆ DNI CHOROBOWEGO (poza wyliczeniem) "); ws["R11"] = N(line.days_sick); }
     ws["M12"] = S("OPIS");
@@ -314,8 +351,67 @@ export function buildOzarWorkbook(inp: ExportInput): XLSX.WorkBook {
     ws[`J${dStart}`] = S("SZCZEGÓŁY: OBCIĄŻENIA"); ws[`K${dStart}`] = S("KWOTA PLN"); ws[`L${dStart}`] = S("OPIS");
     deds.forEach((e, i) => { ws[`J${dStart + 1 + i}`] = S(e.category); ws[`K${dStart + 1 + i}`] = N(e.amount_pln); ws[`L${dStart + 1 + i}`] = S(entryText(e)); });
 
-    ws["!ref"] = `J2:V${Math.max(dStart + deds.length, 18 + credits.length)}`;
-    ws["!cols"] = Array.from({ length: 22 }, (_, i) => ({ wch: i === 9 ? 26 : i === 10 ? 14 : i === 11 ? 60 : i >= 14 && i <= 17 ? 16 : 11 }));
+    // ── formatowanie (adresy komórek bez zmian) ──
+    const lastRow = Math.max(dStart + deds.length, 18 + credits.length);
+    paint(ws, "J2:O2", ST.title, true);
+    paint(ws, "Q2:V2", ST.period, true);
+    setH(ws, 2, 30);
+    // imię i nazwisko
+    paint(ws, "J4:J5", ST.label); paint(ws, "K4:L5", ST.textB);
+    ws["L4"].s = ws["L5"].s = { ...ST.textB, border: { top: side, bottom: side } };
+    ws["K4"].s = ws["K5"].s = { ...ST.textB, border: { top: side, bottom: side, left: side } };
+    // stawki
+    for (const r of [4, 5]) {
+      paint(ws, `Q${r}:R${r}`, ST.label, true);
+      paint(ws, `S${r}`, ST.moneyB);
+      ws[`S${r}`].s = { ...ST.moneyB, numFmt: '#,##0.00" zł"' };
+      paint(ws, `T${r}:V${r}`, ST.note, true);
+    }
+    // dni pracy → kwota
+    paint(ws, "T6:U6", ST.head);
+    paint(ws, "M7", ST.label); paint(ws, "R7:S7", ST.label, true); paint(ws, "T7", ST.int); paint(ws, "U7", ST.moneyB);
+    setH(ws, 7, 30);
+    // uznania
+    paint(ws, "K8", ST.label); paint(ws, "L8:V8", ST.text, true);
+    setH(ws, 8, wrapH(credits.map(entryText).join("; "), 170));
+    paint(ws, "J9", ST.label); paint(ws, "K9", ST.moneyB);
+    paint(ws, "R9:S9", ST.head);
+    // urlop / chorobowe
+    paint(ws, "P10:Q10", ST.label, true); paint(ws, "R10", ST.int); paint(ws, "S10", ST.moneyB);
+    setH(ws, 10, 30);
+    if (line.days_sick > 0) { paint(ws, "P11:Q11", ST.label, true); paint(ws, "R11", ST.int); setH(ws, 11, 30); }
+    // obciążenia i suma
+    paint(ws, "M12", ST.label);
+    paint(ws, "K13", ST.label); paint(ws, "L13", ST.text);
+    paint(ws, "O13:P13", ST.totalLabel, true); paint(ws, "Q13", ST.total);
+    setH(ws, 13, Math.max(wrapH(deds.map(entryText).join("; "), 62, 30), 30));
+    paint(ws, "J14", ST.label); paint(ws, "K14", ST.moneyB);
+    if (line.note) { paint(ws, "J15", ST.label); paint(ws, "K15:V15", ST.text, true); setH(ws, 15, wrapH(line.note, 170)); }
+    // szczegóły pozycji
+    const detail = (hdrRow: number, list: Entry[]) => {
+      paint(ws, `J${hdrRow}:K${hdrRow}`, ST.head); paint(ws, `L${hdrRow}:V${hdrRow}`, ST.head, true);
+      list.forEach((e, i) => {
+        const r = hdrRow + 1 + i;
+        paint(ws, `J${r}`, ST.text); paint(ws, `K${r}`, ST.money); paint(ws, `L${r}:V${r}`, ST.text, true);
+        if (i % 2) for (const c of ["J", "K"]) ws[`${c}${r}`].s = { ...(ws[`${c}${r}`].s as object), fill: solid(BAND) };
+        setH(ws, r, wrapH(entryText(e), 170, 18));
+      });
+    };
+    detail(17, credits);
+    detail(dStart, deds);
+
+    ws["!ref"] = `J2:V${lastRow}`;
+    ws["!cols"] = Array.from({ length: 22 }, (_, i) => {
+      if (i < 9) return { wch: 2, hidden: true };         // A–I: puste, ukryte (układ zgodny z plikiem z czerwca)
+      if (i === 9) return { wch: 26 };                      // J
+      if (i === 10) return { wch: 18 };                     // K
+      if (i === 11) return { wch: 60 };                     // L (opisy)
+      if (i >= 14 && i <= 17) return { wch: 16 };           // O–R
+      if (i === 18 || i === 19) return { wch: 13 };         // S, T
+      if (i === 20) return { wch: 15 };                     // U
+      if (i === 21) return { wch: 4 };                      // V
+      return { wch: 11 };
+    });
     const sheetName = safeSheetName(p.sheet_name ?? `${p.last_name}_${p.first_name}`, used);
     XLSX.utils.book_append_sheet(wb, ws, sheetName);
     rows.push({ name: sheetName, calc, line, rate });
@@ -349,7 +445,28 @@ export function buildOzarWorkbook(inp: ExportInput): XLSX.WorkBook {
   col("F", sumOf((r) => r.line.days_leave)); col("G", sumOf((r) => r.calc.leaveAmount ?? 0));
   col("H", sumOf((r) => r.calc.credits)); col("I", sumOf((r) => r.calc.deductions)); col("J", sumOf((r) => r.calc.total ?? 0));
   wsT["!ref"] = `A1:J${tr}`;
-  wsT["!cols"] = [{ wch: 30 }, { wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 16 }, { wch: 18 }, { wch: 24 }];
+  wsT["!cols"] = [{ wch: 30 }, { wch: 14 }, { wch: 10 }, { wch: 15 }, { wch: 14 }, { wch: 10 }, { wch: 15 }, { wch: 16 }, { wch: 18 }, { wch: 24 }];
+  // formatowanie tabeli zbiorczej
+  paint(wsT, "A1:J1", ST.title, true); setH(wsT, 1, 30);
+  paint(wsT, "A3:J3", ST.head); setH(wsT, 3, 36);
+  const colFmt: Record<string, "money" | "int"> = { B: "money", C: "int", D: "money", E: "money", F: "int", G: "money", H: "money", I: "money", J: "money" };
+  for (let n = first; n <= last; n++) {
+    const band = (n - first) % 2 ? { fill: solid(BAND) } : {};
+    paint(wsT, `A${n}`, { ...ST.text, ...band, alignment: { vertical: "center" as const } });
+    for (const [c, k] of Object.entries(colFmt)) {
+      const base = k === "int" ? { ...ST.int, font: { name: "Calibri", sz: 10 } } : ST.money;
+      paint(wsT, `${c}${n}`, c === "J" ? { ...ST.moneyB, numFmt: MONEY, fill: solid(HILITE) } : { ...base, ...band });
+    }
+    setH(wsT, n, 18);
+  }
+  paint(wsT, `A${tr}`, ST.totalLabel);
+  wsT[`A${tr}`].s = { ...ST.totalLabel, alignment: { horizontal: "left" as const, vertical: "center" as const } };
+  for (const c of "BCDEFGHIJ") {
+    const money = !"CF".includes(c);
+    paint(wsT, `${c}${tr}`, { ...(money ? ST.moneyB : ST.int), fill: solid(LIGHT), numFmt: money ? MONEY : "0", border: { top: { style: "medium" as const, color: { rgb: NAVY } }, bottom: side, left: side, right: side } });
+  }
+  setH(wsT, tr, 22);
+  wsT["!autofilter"] = { ref: `A3:J${last}` };
   XLSX.utils.book_append_sheet(wb, wsT, "RAZEM");
   return wb;
 }

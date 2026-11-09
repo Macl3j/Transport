@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import type { AuthSession as Session } from "@supabase/supabase-js";
-import * as XLSX from "xlsx";
+import * as XLSX from "xlsx-js-style";
 import { supabase } from "@/lib/supabase";
 import {
   type Person, type Rate, type Period, type Line, type Entry, type PayrollRole, type PeriodStatus,
